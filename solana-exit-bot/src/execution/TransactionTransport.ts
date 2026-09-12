@@ -18,6 +18,11 @@ export interface TransactionTransport {
   confirm(signature: string, transaction?: BuiltTransaction): Promise<ConfirmationStatus>;
 }
 
+interface SignatureObservation {
+  status: ConfirmationStatus;
+  absent: boolean;
+}
+
 export class SolanaTransactionTransport implements TransactionTransport {
   private readonly sentByHash = new Map<string, string>();
 
@@ -31,18 +36,18 @@ export class SolanaTransactionTransport implements TransactionTransport {
     const existing = this.sentByHash.get(txHash);
     if (existing) return { signature: existing, endpoint: this.rpcManager.getActiveEndpoint(), duplicate: true };
 
-    if (transaction.lastValidBlockHeight !== undefined) {
-      const currentBlockHeight = await this.getCurrentBlockHeight();
-      if (currentBlockHeight > transaction.lastValidBlockHeight) {
-        throw new Error(`Transaction blockhash expired before broadcast: current=${currentBlockHeight} lastValid=${transaction.lastValidBlockHeight}`);
-      }
-    }
-
     const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
     const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
     let lastError: unknown;
 
     for (const endpoint of candidates) {
+      if (transaction.lastValidBlockHeight !== undefined) {
+        const currentBlockHeight = await this.getCurrentBlockHeight();
+        if (currentBlockHeight > transaction.lastValidBlockHeight) {
+          throw new Error(`Transaction blockhash expired before broadcast: current=${currentBlockHeight} lastValid=${transaction.lastValidBlockHeight}`);
+        }
+      }
+
       const started = Date.now();
       try {
         const connection = this.rpcManager.getConnection(endpoint);
@@ -57,14 +62,15 @@ export class SolanaTransactionTransport implements TransactionTransport {
         lastError = error;
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, false);
 
-        // A network/timeout failure can happen after the RPC accepted the
-        // transaction. Never send the same signed transaction to another RPC
-        // until we have reconciled the original signature.
+        if (this.isBlockhashExpiredError(error)) {
+          throw error;
+        }
+
         if (this.isSubmissionUncertainError(error)) {
           const signature = this.deriveSignature(transaction);
           if (signature) {
             const reconciliation = await this.confirm(signature, transaction);
-            if (reconciliation === "confirmed") {
+            if (reconciliation === "confirmed" || reconciliation === "finalized") {
               this.sentByHash.set(txHash, signature);
               return { signature, endpoint, duplicate: false };
             }
@@ -89,19 +95,22 @@ export class SolanaTransactionTransport implements TransactionTransport {
       const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
       const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
       let highestObservedBlockHeight: number | undefined;
+      let successfulAbsentLookup = false;
 
       for (const endpoint of candidates) {
         const connection = this.rpcManager.getConnection(endpoint);
-        const status = await this.confirmOnConnection(connection, signature);
-        if (status === "confirmed" || status === "failed") return status;
+        const observation = await this.confirmOnConnection(connection, signature);
+        if (observation.status === "confirmed" || observation.status === "finalized" || observation.status === "failed") return observation.status;
+        successfulAbsentLookup ||= observation.absent;
 
         if (transaction?.lastValidBlockHeight !== undefined) {
           try {
             const blockHeight = await connection.getBlockHeight("confirmed");
             highestObservedBlockHeight = Math.max(highestObservedBlockHeight ?? blockHeight, blockHeight);
             if (blockHeight > transaction.lastValidBlockHeight) {
-              const finalStatus = await this.confirmOnConnection(connection, signature);
-              if (finalStatus === "confirmed" || finalStatus === "failed") return finalStatus;
+              const finalObservation = await this.confirmOnConnection(connection, signature);
+              if (finalObservation.status === "confirmed" || finalObservation.status === "finalized" || finalObservation.status === "failed") return finalObservation.status;
+              successfulAbsentLookup ||= finalObservation.absent;
             }
           } catch {
             // A block-height RPC failure is uncertainty, not proof of expiry.
@@ -109,7 +118,7 @@ export class SolanaTransactionTransport implements TransactionTransport {
         }
       }
 
-      if (transaction?.lastValidBlockHeight !== undefined && highestObservedBlockHeight !== undefined && highestObservedBlockHeight > transaction.lastValidBlockHeight) {
+      if (transaction?.lastValidBlockHeight !== undefined && highestObservedBlockHeight !== undefined && highestObservedBlockHeight > transaction.lastValidBlockHeight && successfulAbsentLookup) {
         return "expired";
       }
 
@@ -123,35 +132,38 @@ export class SolanaTransactionTransport implements TransactionTransport {
   private async getCurrentBlockHeight(): Promise<number> {
     const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
     const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
+    let highestBlockHeight: number | undefined;
     let lastError: unknown;
     for (const endpoint of candidates) {
       const started = Date.now();
       try {
         const connection = this.rpcManager.getConnection(endpoint);
         const blockHeight = await connection.getBlockHeight("confirmed");
+        highestBlockHeight = Math.max(highestBlockHeight ?? blockHeight, blockHeight);
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, true);
-        return blockHeight;
       } catch (error) {
         lastError = error;
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, false);
       }
     }
+    if (highestBlockHeight !== undefined) return highestBlockHeight;
     throw new Error(`Unable to read Solana block height before broadcast: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
-  private async confirmOnConnection(connection: Connection, signature: string): Promise<ConfirmationStatus> {
+  private async confirmOnConnection(connection: Connection, signature: string): Promise<SignatureObservation> {
     const started = Date.now();
     try {
       const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
       await this.rpcManager.recordHealthCheck(connection.rpcEndpoint, Date.now() - started, true);
       const value = status.value;
-      if (!value) return "unknown";
-      if (value.err) return "failed";
-      if (value.confirmationStatus === "confirmed" || value.confirmationStatus === "finalized") return "confirmed";
-      return "unknown";
+      if (!value) return { status: "unknown", absent: true };
+      if (value.err) return { status: "failed", absent: false };
+      if (value.confirmationStatus === "finalized") return { status: "finalized", absent: false };
+      if (value.confirmationStatus === "confirmed") return { status: "confirmed", absent: false };
+      return { status: "unknown", absent: false };
     } catch {
       await this.rpcManager.recordHealthCheck(connection.rpcEndpoint, Date.now() - started, false);
-      return "unknown";
+      return { status: "unknown", absent: false };
     }
   }
 
@@ -159,6 +171,11 @@ export class SolanaTransactionTransport implements TransactionTransport {
     if (!(error instanceof Error)) return false;
     const text = `${error.name} ${error.message}`.toLowerCase();
     return /abort|timeout|timed out|timedout|network|fetch failed|socket|econnreset|etimedout|eai_again|502|503|504/.test(text);
+  }
+
+  private isBlockhashExpiredError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return /blockhash.*(expired|not found|too old)|transaction.*expired/i.test(error.message);
   }
 
   private deriveSignature(transaction: BuiltTransaction): string | undefined {
