@@ -1,4 +1,4 @@
-import { ExitTrigger, ExecutionAttempt, ExecutionStatus } from "../types.js";
+import { ExitTrigger, ExecutionAttempt } from "../types.js";
 
 const now = () => Date.now();
 
@@ -31,7 +31,7 @@ export class ExecutionAttemptTracker {
     this.attempt.finalizedAt = finalized ? at : this.attempt.finalizedAt;
     this.attempt.status = finalized ? "FINALIZED" : "CONFIRMED";
   }
-  markFailed(at = now()): void { this.attempt.status = "FAILED"; this.attempt.confirmedAt = at; }
+  markFailed(at = now()): void { this.attempt.status = "FAILED"; this.attempt.failedAt = at; }
   markUnknown(): void { this.attempt.status = "UNKNOWN"; }
   markExpired(at = now()): void { this.attempt.expiryDetectedAt = at; this.attempt.status = "EXPIRED"; }
   markReconciling(): void { this.attempt.status = "RECONCILING"; }
