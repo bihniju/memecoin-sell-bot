@@ -41,12 +41,29 @@ describe("PositionManager adversarial chaos", () => {
     expect(manager.get("MINT")?.remainingPercentage).toBe(0);
   });
 
-  test("price updates remain finite under extreme values", () => {
+  test("extreme price updates never create non-finite PnL", () => {
     const manager = new PositionManager();
     manager.upsert(makePosition());
     manager.updatePrice("MINT", Number.MAX_VALUE);
     const p = manager.get("MINT");
     expect(p?.highestPrice).toBe(Number.MAX_VALUE);
-    expect(Number.isFinite(p?.unrealizedPnL ?? 0)).toBe(false);
+    expect(Number.isFinite(p?.unrealizedPnL ?? 0)).toBe(true);
+    expect(p?.unrealizedPnL).toBe(Number.MAX_VALUE);
+  });
+
+  test("NaN and infinite market/fill inputs cannot corrupt position state", () => {
+    const manager = new PositionManager();
+    manager.upsert(makePosition());
+
+    manager.updatePrice("MINT", Number.NaN);
+    manager.updatePrice("MINT", Number.POSITIVE_INFINITY);
+    manager.applyFill("MINT", Number.NaN, 500);
+    manager.applyFill("MINT", 50, Number.POSITIVE_INFINITY);
+
+    const p = manager.get("MINT");
+    expect(p?.currentPrice).toBe(1);
+    expect(p?.remainingPercentage).toBe(100);
+    expect(p?.realizedPnL).toBe(0);
+    expect(Number.isFinite(p?.unrealizedPnL ?? 0)).toBe(true);
   });
 });
