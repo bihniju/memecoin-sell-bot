@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { PositionManager } from "../../src/position/PositionManager.js";
 import { createPosition } from "../../src/position/PositionState.js";
 import { RiskEngine } from "../../src/risk/RiskEngine.js";
-import { RiskConfig, PriceTick } from "../../src/types.js";
+import { RiskConfig, PriceTick, TriggerDecision } from "../../src/types.js";
 
 const riskConfig: RiskConfig = {
   stopLossEnabled: true,
@@ -69,11 +69,22 @@ describe("high-volume soak", () => {
       { mint: "CRASH", price: 0.10, timestamp: Date.now() - 100, volumeBuy: 1, volumeSell: 500 }
     ];
 
-    let lastDecision: any[] = [];
+    let lastDecision: TriggerDecision | undefined;
     for (const tick of ticks) {
-      lastDecision = engine.evaluate({ position, tick, liquidity: undefined, quoteAvailable: true, priceImpactBps: 100, marketDataStale: false, rpcCongested: false });
-      expect(lastDecision.every((d) => Number.isFinite(d.riskScore) && Number.isFinite(d.pnlPct))).toBe(true);
+      lastDecision = engine.evaluate({
+        position,
+        prices: [tick],
+        liquidity: [],
+        hasValidRoute: true,
+        priceImpactBps: 100,
+        marketDataStale: false,
+        rpcCongested: false
+      });
+      if (lastDecision) {
+        expect(Number.isFinite(lastDecision.riskScore)).toBe(true);
+        expect(Number.isFinite(lastDecision.pnlPct)).toBe(true);
+      }
     }
-    expect(lastDecision.length).toBeGreaterThan(0);
+    expect(lastDecision).toBeDefined();
   });
 });
