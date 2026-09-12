@@ -12,36 +12,54 @@ const parseBigInt = (value: unknown): bigint => {
   return 0n;
 };
 
+const minimumAfterSlippage = (amount: bigint, slippageBps: number): bigint => {
+  const bps = BigInt(Math.max(0, Math.min(10_000, Math.trunc(slippageBps))));
+  return (amount * (10_000n - bps)) / 10_000n;
+};
+
 export class JupiterQuoteProvider implements QuoteProvider {
-  constructor(private readonly endpoint: string) {}
+  constructor(private readonly endpoint: string, private readonly apiKey?: string) {}
 
   async getQuote(params: QuoteRequest): Promise<Quote> {
+    if (params.amount <= 0n) throw new Error("Quote amount must be greater than zero");
+
     const query = new URLSearchParams({
       inputMint: params.inputMint,
       outputMint: params.outputMint,
       amount: params.amount.toString(),
-      slippageBps: params.slippageBps.toString(),
-      onlyDirectRoutes: params.onlyDirectRoutes ? "true" : "false"
+      slippageBps: Math.max(0, Math.min(10_000, Math.trunc(params.slippageBps))).toString()
     });
+    if (params.onlyDirectRoutes !== undefined) query.set("onlyDirectRoutes", String(params.onlyDirectRoutes));
 
-    const res = await fetch(`${this.endpoint}?${query.toString()}`);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1_500);
+    let res: Response;
+    try {
+      res = await fetch(`${this.endpoint}?${query.toString()}`, { headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+
     if (!res.ok) {
-      throw new Error(`Quote request failed: ${res.status}`);
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Jupiter quote failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ""}`);
     }
 
     const body = (await res.json()) as Record<string, unknown>;
-
     const outAmount = parseBigInt(body.outAmount);
-    const routeAvailable = Boolean(body.routePlan || body.marketInfos) && outAmount > 0n;
-    const slippagePct = Number(params.slippageBps) / 10_000;
-    const minimumOutAmount = outAmount > 0n ? BigInt(Math.floor(Number(outAmount) * (1 - slippagePct))) : 0n;
+    const routePlan = Array.isArray(body.routePlan) ? body.routePlan : undefined;
+    const routeAvailable = outAmount > 0n && (routePlan === undefined || routePlan.length > 0);
+    const priceImpactPct = Number(body.priceImpactPct ?? 0);
 
     return {
       provider: "jupiter",
       inAmount: parseBigInt(body.inAmount ?? params.amount),
       expectedOutAmount: outAmount,
-      minimumOutAmount,
-      priceImpactBps: Math.round(Number(body.priceImpactPct ?? 0) * 10_000),
+      minimumOutAmount: minimumAfterSlippage(outAmount, params.slippageBps),
+      priceImpactBps: Number.isFinite(priceImpactPct) ? Math.max(0, Math.round(priceImpactPct * 10_000)) : 0,
       routeAvailable,
       routeInfo: body,
       timestamp: Date.now()
@@ -54,12 +72,7 @@ export class JupiterQuoteProvider implements QuoteProvider {
     const sellFraction = clamped / 100;
     const amountRaw = BigInt(Math.floor(position.amount * remainingFraction * sellFraction));
 
-    return this.getQuote({
-      inputMint: position.mint,
-      outputMint,
-      amount: amountRaw,
-      slippageBps
-    });
+    return this.getQuote({ inputMint: position.mint, outputMint, amount: amountRaw, slippageBps });
   }
 }
 
@@ -68,8 +81,7 @@ export class SimulatedQuoteProvider implements QuoteProvider {
 
   async getQuote(params: QuoteRequest): Promise<Quote> {
     const expectedOut = params.amount;
-    const minOut = BigInt(Math.floor(Number(expectedOut) * (1 - this.slippageBps / 10_000)));
-
+    const minOut = minimumAfterSlippage(expectedOut, this.slippageBps);
     return {
       provider: "simulated",
       inAmount: params.amount,
@@ -83,16 +95,15 @@ export class SimulatedQuoteProvider implements QuoteProvider {
   }
 
   async quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number): Promise<Quote> {
-    const _ = outputMint;
     const clamped = Math.max(0, Math.min(100, sellPct));
     const amountRaw = BigInt(Math.floor(position.amount * (position.remainingPercentage / 100) * (clamped / 100)));
     const grossOut = Math.floor(Number(amountRaw) * position.currentPrice);
-    const minOut = BigInt(Math.floor(grossOut * (1 - slippageBps / 10_000)));
+    const minOut = minimumAfterSlippage(BigInt(Math.max(0, grossOut)), slippageBps);
 
     return {
       provider: "simulated",
       inAmount: amountRaw,
-      expectedOutAmount: BigInt(grossOut),
+      expectedOutAmount: BigInt(Math.max(0, grossOut)),
       minimumOutAmount: minOut,
       priceImpactBps: this.slippageBps,
       routeAvailable: grossOut > 0,
