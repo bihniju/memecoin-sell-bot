@@ -9,7 +9,7 @@ export interface MarketDataProvider {
 }
 
 interface SubscriptionMeta { id: number; key: string; }
-interface ProviderOptions { heartbeatMs: number; staleMs: number; reconnectBaseMs: number; reconnectMaxMs: number; }
+interface ProviderOptions { heartbeatMs: number; staleMs: number; reconnectBaseMs: number; reconnectMaxMs: number; connectTimeoutMs: number; }
 
 export class WebSocketManager extends EventEmitter implements MarketDataProvider {
   private ws?: WebSocket;
@@ -27,9 +27,6 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
   constructor(private readonly endpoints: string | string[], private readonly options: ProviderOptions) {
     super();
     if ((typeof endpoints === "string" ? [endpoints] : endpoints).length === 0) throw new Error("At least one WebSocket endpoint is required");
-    // EventEmitter treats an emitted "error" without a listener as an uncaught
-    // exception. Keep the provider safe for direct/library use while still
-    // allowing applications to attach their own error listener.
     this.on("error", () => undefined);
   }
 
@@ -85,9 +82,23 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
       const socket = new WebSocket(endpoint);
       this.ws = socket;
       let settled = false;
+      let timeout: NodeJS.Timeout | undefined;
+
+      const fail = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        if (this.ws === socket) this.ws = undefined;
+        try { socket.terminate(); } catch { /* best effort */ }
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+
+      timeout = setTimeout(() => fail(new Error(`WebSocket connection timeout: ${endpoint}`)), this.options.connectTimeoutMs);
 
       socket.once("open", () => {
+        if (settled) return;
         settled = true;
+        if (timeout) clearTimeout(timeout);
         this.connected = true;
         this.reconnectAttempts = 0;
         this.lastMessageAt = Date.now();
@@ -106,7 +117,7 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
       });
       socket.on("error", (err) => {
         this.emit("error", err);
-        if (!settled) reject(err);
+        fail(err);
       });
     });
   }
@@ -217,12 +228,12 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
 
 export class SolanaWebSocketAdapter extends WebSocketManager {
   constructor(endpoint: string | string[], heartbeatMs: number, staleMs: number) {
-    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 250, reconnectMaxMs: 5_000 });
+    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 250, reconnectMaxMs: 5_000, connectTimeoutMs: 750 });
   }
 }
 
 export class HeliusWebSocketAdapter extends WebSocketManager {
   constructor(endpoint: string | string[], heartbeatMs: number, staleMs: number) {
-    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 150, reconnectMaxMs: 3_000 });
+    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 150, reconnectMaxMs: 3_000, connectTimeoutMs: 750 });
   }
 }
