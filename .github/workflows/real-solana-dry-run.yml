@@ -6,18 +6,21 @@ on:
       wallet_public_key:
         description: "Test wallet public key"
         required: true
-        default: "68adSzS2CZised4BTryTKYjEc5MwNaHHE38FpXymeKv7"
+        default: "BoQjeJzpBTFzNyGStuAvDYsrvbwfGhd3Wspw5PLMnY6s"
         type: string
       position_mint:
         description: "Test token mint"
         required: true
-        default: "2BCgn48Y674aunyexfMsCjTeQytcpUDASM28fykFFfS8"
+        default: "EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump"
         type: string
       rpc_url:
         description: "Solana RPC endpoint"
         required: true
         default: "https://api.mainnet-beta.solana.com"
         type: string
+  push:
+    paths:
+      - ".github/workflows/real-solana-dry-run.yml"
 
 permissions:
   contents: read
@@ -32,16 +35,18 @@ jobs:
       MODE: dry-run
       DRY_RUN: "true"
       LIVE_TRADING_ENABLED: "false"
-      WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key }}
-      POSITION_MINT: ${{ inputs.position_mint }}
-      RPC_ENDPOINTS: ${{ inputs.rpc_url }}
+      WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key || 'BoQjeJzpBTFzNyGStuAvDYsrvbwfGhd3Wspw5PLMnY6s' }}
+      POSITION_MINT: ${{ inputs.position_mint || 'EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump' }}
+      RPC_ENDPOINTS: ${{ inputs.rpc_url || 'https://api.mainnet-beta.solana.com' }}
       POSITION_DECIMALS: "6"
       POSITION_AMOUNT: "1"
       POSITION_ENTRY_PRICE: "1"
 
     steps:
-      - name: Checkout
+      - name: Checkout dry-run implementation
         uses: actions/checkout@v5
+        with:
+          ref: p0-real-dry-run
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -61,6 +66,14 @@ jobs:
 
       - name: Run unit tests
         run: npm test
+
+      - name: Print dry-run target
+        run: |
+          echo "DRY_RUN=true"
+          echo "LIVE_TRADING_ENABLED=false"
+          echo "WALLET_PUBLIC_KEY=$WALLET_PUBLIC_KEY"
+          echo "POSITION_MINT=$POSITION_MINT"
+          echo "RPC_ENDPOINTS=$RPC_ENDPOINTS"
 
       - name: Run real mainnet dry-run
         run: npm run dry-run:real
