@@ -33,7 +33,7 @@ describe("transaction chaos", () => {
         async sendRawTransaction() { secondAttempts += 1; return "sig-b"; }
       }
     };
-    const transport = new SolanaTransactionTransport(managerFor(connections), {
+    const transport = new SolanaTransactionTransport(managerFor(connections) as never, {
       skipPreflight: true,
       maxRetries: 0,
       confirmationTimeoutMs: 50
@@ -52,7 +52,7 @@ describe("transaction chaos", () => {
       async sendRawTransaction() { sends += 1; return "sig-unknown"; },
       async getSignatureStatus() { return { value: null }; }
     };
-    const transport = new SolanaTransactionTransport(managerFor({ "http://a": connection }), {
+    const transport = new SolanaTransactionTransport(managerFor({ "http://a": connection }) as never, {
       skipPreflight: true,
       maxRetries: 3,
       confirmationTimeoutMs: 5
@@ -69,7 +69,7 @@ describe("transaction chaos", () => {
       rpcEndpoint: "http://a",
       async sendRawTransaction() { sends += 1; return `sig-${sends}`; }
     };
-    const transport = new SolanaTransactionTransport(managerFor({ "http://a": connection }), {
+    const transport = new SolanaTransactionTransport(managerFor({ "http://a": connection }) as never, {
       skipPreflight: true,
       maxRetries: 1,
       confirmationTimeoutMs: 20
@@ -88,7 +88,7 @@ describe("transaction chaos", () => {
       "http://a": { rpcEndpoint: "http://a", async sendRawTransaction() { throw new Error("down-a"); } },
       "http://b": { rpcEndpoint: "http://b", async sendRawTransaction() { throw new Error("down-b"); } }
     };
-    const transport = new SolanaTransactionTransport(managerFor(connections), {
+    const transport = new SolanaTransactionTransport(managerFor(connections) as never, {
       skipPreflight: true,
       maxRetries: 0,
       confirmationTimeoutMs: 20
