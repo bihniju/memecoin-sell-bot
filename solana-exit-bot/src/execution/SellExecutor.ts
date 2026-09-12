@@ -65,6 +65,16 @@ export class SellExecutor {
       this.activeMints.add(item.mint);
       try {
         await this.processItem(item.mint, item.decision, item.marketEventAt);
+      } catch (error) {
+        this.logger.error("Sell execution crashed", {
+          mint: item.mint,
+          trigger: item.decision.trigger,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        const position = this.positions.get(item.mint);
+        if (position && position.sellState === "SELLING") {
+          this.positions.setSellState(item.mint, "FAILED");
+        }
       } finally {
         this.activeMints.delete(item.mint);
       }
@@ -79,71 +89,98 @@ export class SellExecutor {
 
     this.positions.setSellState(mint, "SELLING");
     position.lastTrigger = decision.trigger;
+    position.lastSellAttempt = Date.now();
+
+    let lastFailure = "no execution attempt completed";
 
     for (const attempt of this.retryManager.attempts()) {
       const current = this.positions.get(mint);
       if (!current || current.remainingPercentage <= 0) return;
 
-      const riskDecisionAt = Date.now();
-      const quoteRequestedAt = Date.now();
-      const quote = await this.quoteProvider.quoteForPosition(
-        current,
-        this.config.market.outputMint,
-        decision.sellPct,
-        this.config.execution.quoteSlippageBps
-      );
-      const quoteReceivedAt = Date.now();
+      try {
+        const riskDecisionAt = Date.now();
+        const quoteRequestedAt = Date.now();
+        const quote = await this.quoteProvider.quoteForPosition(
+          current,
+          this.config.market.outputMint,
+          decision.sellPct,
+          this.config.execution.quoteSlippageBps
+        );
+        const quoteReceivedAt = Date.now();
 
-      const quoteValidation = this.validateQuote(current, quote);
-      if (!quoteValidation.ok) {
-        this.logger.warn("Quote rejected", { mint, reason: quoteValidation.reason, trigger: decision.trigger });
-        continue;
+        const quoteValidation = this.validateQuote(current, quote);
+        if (!quoteValidation.ok) {
+          lastFailure = quoteValidation.reason;
+          this.logger.warn("Quote rejected", { mint, reason: quoteValidation.reason, trigger: decision.trigger, attempt });
+          continue;
+        }
+
+        const emergencyFee = decision.trigger === "EMERGENCY" || decision.riskScore >= this.config.risk.riskScoreEmergency;
+        const priorityFeeMicrolamports = await this.feeManager.resolveFee(decision, attempt, emergencyFee);
+        const walletPubkey = this.resolveWalletPublicKey(current);
+        const tx = await this.txBuilder.buildSellTransaction({
+          wallet: walletPubkey,
+          position: current,
+          quote,
+          priorityFeeMicrolamports
+        });
+
+        const timestamps: ExitLatencyTimestamps = {
+          marketEventAt,
+          riskDecisionAt,
+          quoteRequestedAt,
+          quoteReceivedAt,
+          transactionBuiltAt: Date.now()
+        };
+
+        if (this.config.mode === "paper") {
+          await new Promise((resolve) => setTimeout(resolve, this.config.execution.simulationLatencyMs));
+          this.positions.applyFill(mint, decision.sellPct, Number(quote.expectedOutAmount), "paper-simulated");
+          this.logExit(current, decision, quote, priorityFeeMicrolamports, "paper-simulated", "confirmed", timestamps);
+          return;
+        }
+
+        if (this.config.mode === "dry-run" || this.config.dryRun) {
+          this.positions.setSellState(mint, "IDLE");
+          this.logExit(current, decision, quote, priorityFeeMicrolamports, "dry-run", "unknown", timestamps);
+          return;
+        }
+
+        if (!this.wallet) {
+          throw new Error("Live mode requires loaded wallet");
+        }
+
+        timestamps.transactionSignedAt = Date.now();
+        const signed = signBuiltTransaction(tx, this.wallet);
+
+        const result = await this.submitAndTrack(signed, current, quote, decision, priorityFeeMicrolamports, timestamps);
+        if (result.status === "confirmed" || result.status === "unknown") return;
+
+        lastFailure = result.reason;
+        this.logger.warn("Sell transaction failed; retrying", {
+          mint,
+          attempt,
+          maxAttempts: this.config.execution.maxSellRetries,
+          reason: result.reason
+        });
+      } catch (error) {
+        lastFailure = error instanceof Error ? error.message : String(error);
+        this.logger.warn("Sell attempt failed; retrying", {
+          mint,
+          attempt,
+          maxAttempts: this.config.execution.maxSellRetries,
+          error: lastFailure
+        });
       }
-
-      const emergencyFee = decision.trigger === "EMERGENCY" || decision.riskScore >= this.config.risk.riskScoreEmergency;
-      const priorityFeeMicrolamports = await this.feeManager.resolveFee(decision, attempt, emergencyFee);
-      const transactionBuiltAt = Date.now();
-      const walletPubkey = this.resolveWalletPublicKey(current);
-      const tx = await this.txBuilder.buildSellTransaction({
-        wallet: walletPubkey,
-        position: current,
-        quote,
-        priorityFeeMicrolamports
-      });
-
-      const timestamps: ExitLatencyTimestamps = {
-        marketEventAt,
-        riskDecisionAt,
-        quoteRequestedAt,
-        quoteReceivedAt,
-        transactionBuiltAt: Date.now()
-      };
-
-      if (this.config.mode === "paper") {
-        await new Promise((resolve) => setTimeout(resolve, this.config.execution.simulationLatencyMs));
-        this.positions.applyFill(mint, decision.sellPct, Number(quote.expectedOutAmount), "paper-simulated");
-        this.logExit(current, decision, quote, priorityFeeMicrolamports, "paper-simulated", "confirmed", timestamps);
-        return;
-      }
-
-      if (this.config.mode === "dry-run" || this.config.dryRun) {
-        this.positions.setSellState(mint, "IDLE");
-        this.logExit(current, decision, quote, priorityFeeMicrolamports, "dry-run", "unknown", timestamps);
-        return;
-      }
-
-      if (!this.wallet) {
-        throw new Error("Live mode requires loaded wallet");
-      }
-
-      timestamps.transactionSignedAt = Date.now();
-      const signed = signBuiltTransaction(tx, this.wallet);
-
-      const result = await this.submitAndTrack(signed, current, quote, decision, priorityFeeMicrolamports, timestamps);
-      if (result.status === "confirmed" || result.status === "unknown") return;
     }
 
     this.positions.setSellState(mint, "FAILED");
+    this.logger.error("All sell attempts exhausted", {
+      mint,
+      trigger: decision.trigger,
+      attempts: this.config.execution.maxSellRetries,
+      reason: lastFailure
+    });
   }
 
   private async submitAndTrack(
@@ -154,8 +191,9 @@ export class SellExecutor {
     priorityFeeMicrolamports: number,
     timestamps: ExitLatencyTimestamps
   ): Promise<SellExecutionResult> {
-    timestamps.transactionSubmittedAt = Date.now();
+    const submittedAt = Date.now();
     const { signature, endpoint, duplicate } = await this.transport.send(tx);
+    timestamps.transactionSubmittedAt = submittedAt;
 
     const status = await this.transport.confirm(signature);
     timestamps.confirmationAt = Date.now();
@@ -163,6 +201,7 @@ export class SellExecutor {
     if (status === "confirmed") {
       this.positions.applyFill(position.mint, decision.sellPct, Number(quote.expectedOutAmount), signature);
     } else if (status === "unknown") {
+      // Never retry an unknown broadcast automatically: the transaction may have landed.
       this.positions.setSellState(position.mint, "UNKNOWN");
     } else {
       this.positions.setSellState(position.mint, "FAILED");
