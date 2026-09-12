@@ -135,7 +135,10 @@ export class SellExecutor {
 
         if (this.config.mode === "paper") {
           await new Promise((resolve) => setTimeout(resolve, this.config.execution.simulationLatencyMs));
-          this.positions.applyFill(mint, decision.sellPct, Number(quote.expectedOutAmount), "paper-simulated");
+          const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER)
+            ? Number(quote.expectedOutAmount)
+            : Number.MAX_VALUE;
+          this.positions.applyFill(mint, decision.sellPct, expectedOut, "paper-simulated");
           this.logExit(current, decision, quote, priorityFeeMicrolamports, "paper-simulated", "confirmed", timestamps);
           return;
         }
@@ -199,7 +202,10 @@ export class SellExecutor {
     timestamps.confirmationAt = Date.now();
 
     if (status === "confirmed") {
-      this.positions.applyFill(position.mint, decision.sellPct, Number(quote.expectedOutAmount), signature);
+      const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number(quote.expectedOutAmount)
+        : Number.MAX_VALUE;
+      this.positions.applyFill(position.mint, decision.sellPct, expectedOut, signature);
     } else if (status === "unknown") {
       // Never retry an unknown broadcast automatically: the transaction may have landed.
       this.positions.setSellState(position.mint, "UNKNOWN");
@@ -214,12 +220,17 @@ export class SellExecutor {
 
   private validateQuote(position: Position, quote: Quote): { ok: true } | { ok: false; reason: string } {
     const remainingAmount = position.amount * (position.remainingPercentage / 100);
-    if (remainingAmount <= 0) return { ok: false, reason: "insufficient token balance" };
+    if (!Number.isFinite(remainingAmount) || remainingAmount <= 0) return { ok: false, reason: "insufficient token balance" };
     if (quote.inAmount <= 0n) return { ok: false, reason: "invalid token amount" };
     if (!quote.routeAvailable) return { ok: false, reason: "no route" };
     if (quote.expectedOutAmount <= 0n || quote.minimumOutAmount <= 0n) return { ok: false, reason: "zero output" };
+    if (quote.minimumOutAmount > quote.expectedOutAmount) return { ok: false, reason: "invalid minimum output" };
+    if (!Number.isFinite(quote.priceImpactBps) || quote.priceImpactBps < 0) return { ok: false, reason: "invalid price impact" };
     if (quote.priceImpactBps > this.config.risk.maxPriceImpactBps) return { ok: false, reason: "excessive price impact" };
-    if (Date.now() - quote.timestamp > this.config.execution.quoteStaleMs) return { ok: false, reason: "stale quote" };
+    if (!Number.isFinite(quote.timestamp) || quote.timestamp <= 0) return { ok: false, reason: "invalid quote timestamp" };
+    const quoteAgeMs = Date.now() - quote.timestamp;
+    if (quoteAgeMs < 0) return { ok: false, reason: "quote timestamp is in the future" };
+    if (quoteAgeMs > this.config.execution.quoteStaleMs) return { ok: false, reason: "stale quote" };
     return { ok: true };
   }
 

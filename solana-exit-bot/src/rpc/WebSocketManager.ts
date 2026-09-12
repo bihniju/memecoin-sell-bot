@@ -9,7 +9,7 @@ export interface MarketDataProvider {
 }
 
 interface SubscriptionMeta { id: number; key: string; }
-interface ProviderOptions { heartbeatMs: number; staleMs: number; reconnectBaseMs: number; reconnectMaxMs: number; }
+interface ProviderOptions { heartbeatMs: number; staleMs: number; reconnectBaseMs: number; reconnectMaxMs: number; connectTimeoutMs: number; }
 
 export class WebSocketManager extends EventEmitter implements MarketDataProvider {
   private ws?: WebSocket;
@@ -27,6 +27,7 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
   constructor(private readonly endpoints: string | string[], private readonly options: ProviderOptions) {
     super();
     if ((typeof endpoints === "string" ? [endpoints] : endpoints).length === 0) throw new Error("At least one WebSocket endpoint is required");
+    this.on("error", () => undefined);
   }
 
   private get endpointList(): string[] { return typeof this.endpoints === "string" ? [this.endpoints] : this.endpoints; }
@@ -81,28 +82,58 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
       const socket = new WebSocket(endpoint);
       this.ws = socket;
       let settled = false;
+      let timeout: NodeJS.Timeout | undefined;
+
+      const isCurrentSocket = (): boolean => this.ws === socket;
+
+      const fail = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        if (isCurrentSocket()) this.ws = undefined;
+        try { socket.terminate(); } catch { /* best effort */ }
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+
+      timeout = setTimeout(() => fail(new Error(`WebSocket connection timeout: ${endpoint}`)), this.options.connectTimeoutMs);
 
       socket.once("open", () => {
+        if (settled) return;
         settled = true;
+        if (timeout) clearTimeout(timeout);
         this.connected = true;
         this.reconnectAttempts = 0;
         this.lastMessageAt = Date.now();
         this.emit("connected", { endpoint });
         resolve();
       });
-      socket.on("message", (msg) => this.handleMessage(msg.toString()));
-      socket.on("pong", () => { this.lastMessageAt = Date.now(); });
+      socket.on("message", (msg) => {
+        if (!isCurrentSocket()) return;
+        this.handleMessage(msg.toString());
+      });
+      socket.on("pong", () => {
+        if (isCurrentSocket()) this.lastMessageAt = Date.now();
+      });
       socket.on("close", () => {
-        this.connected = false;
-        this.emit("disconnected", { endpoint });
-        if (!this.manualClose) {
+        if (!isCurrentSocket() && !(!settled && this.ws === undefined)) return;
+        if (isCurrentSocket()) {
+          this.connected = false;
+          this.ws = undefined;
+          this.emit("disconnected", { endpoint });
+        }
+        if (!settled) {
+          fail(new Error(`WebSocket closed before open: ${endpoint}`));
+          return;
+        }
+        if (!this.manualClose && isCurrentSocket()) {
           this.endpointIndex = (this.endpointIndex + 1) % this.endpointList.length;
           this.scheduleReconnect();
         }
       });
       socket.on("error", (err) => {
+        if (!isCurrentSocket() && settled) return;
         this.emit("error", err);
-        if (!settled) reject(err);
+        fail(err);
       });
     });
   }
@@ -213,12 +244,12 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
 
 export class SolanaWebSocketAdapter extends WebSocketManager {
   constructor(endpoint: string | string[], heartbeatMs: number, staleMs: number) {
-    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 250, reconnectMaxMs: 5_000 });
+    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 250, reconnectMaxMs: 5_000, connectTimeoutMs: 750 });
   }
 }
 
 export class HeliusWebSocketAdapter extends WebSocketManager {
   constructor(endpoint: string | string[], heartbeatMs: number, staleMs: number) {
-    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 150, reconnectMaxMs: 3_000 });
+    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 150, reconnectMaxMs: 3_000, connectTimeoutMs: 750 });
   }
 }
