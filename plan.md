@@ -79,7 +79,7 @@
 - [x] Assert real dry-run cannot call `sendRawTransaction`.
 - [x] Assert CI/test environments cannot accidentally enter live mode.
 - [x] Test Jupiter 429, 5xx, timeout, malformed response, and no-route behavior.
-- [ ] Test RPC timeout, rate limiting, stale endpoint, and unavailable endpoint behavior.
+- [x] Test RPC timeout, rate limiting, stale endpoint, and unavailable endpoint behavior.
 
 ### 9A. Cloud validation
 - [x] Add a manual GitHub Actions workflow for the real mainnet dry-run.
@@ -278,6 +278,6 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** Finish RPC failure-path tests and complete UNKNOWN token/position reconciliation; real mainnet Jupiter quote/build/simulation and dry-run safety tests are now covered, and live trading remains OFF.  
-**Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful.  
+**Current focus:** Complete UNKNOWN token/position reconciliation; RPC failure-path unit coverage now includes timeout-like failures, rate-limit/server-error failures, stale/cooldown behavior, unavailable endpoints, failover, and recovery. Real mainnet Jupiter quote/build/simulation and dry-run safety tests remain covered, and live trading remains OFF.  
+**Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful before the latest test-only commits.  
 **Live trading:** OFF.
