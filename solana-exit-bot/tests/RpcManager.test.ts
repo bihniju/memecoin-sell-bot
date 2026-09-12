@@ -7,7 +7,6 @@ describe("RpcManager", () => {
     const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
     await manager.recordHealthCheck("http://a", 50, false);
     await manager.recordHealthCheck("http://b", 10, true);
-
     expect(manager.getActiveEndpoint()).toBe("http://b");
   });
 
@@ -15,20 +14,16 @@ describe("RpcManager", () => {
     const manager = new RpcManager(["http://timeout", "http://healthy"], new Logger("error"));
     await manager.recordHealthCheck("http://timeout", 900, false);
     await manager.recordHealthCheck("http://healthy", 40, true);
-
     expect(manager.getEndpointsInPriorityOrder()).not.toContain("http://timeout");
     expect(manager.getActiveEndpoint()).toBe("http://healthy");
   });
 
   test("marks rate-limited and server-error endpoints unavailable until cooldown", async () => {
     const manager = new RpcManager(["http://429", "http://503", "http://healthy"], new Logger("error"));
-
     await manager.recordHealthCheck("http://429", 20, false);
     await manager.recordHealthCheck("http://503", 20, false);
     await manager.recordHealthCheck("http://healthy", 30, true);
-
-    const ordered = manager.getEndpointsInPriorityOrder();
-    expect(ordered).toEqual(["http://healthy"]);
+    expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
     expect(manager.getActiveEndpoint()).toBe("http://healthy");
   });
 
@@ -37,9 +32,7 @@ describe("RpcManager", () => {
     await manager.recordHealthCheck("http://a", 25, true);
     await manager.recordHealthCheck("http://b", 50, true);
     expect(manager.getActiveEndpoint()).toBe("http://a");
-
     manager.reportEndpointFailure("http://a");
-
     expect(manager.getActiveEndpoint()).toBe("http://b");
     expect(manager.getEndpointsInPriorityOrder()).not.toContain("http://a");
   });
@@ -48,9 +41,7 @@ describe("RpcManager", () => {
     const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
     await manager.recordHealthCheck("http://a", 20, false);
     expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://b"]);
-
     await manager.recordHealthCheck("http://a", 15, true);
-
     expect(manager.getEndpointsInPriorityOrder()[0]).toBe("http://a");
     expect(manager.getBestLatencyMs()).toBe(15);
   });
@@ -59,19 +50,20 @@ describe("RpcManager", () => {
     vi.useFakeTimers();
     try {
       const manager = new RpcManager(["http://flapping", "http://healthy"], new Logger("error"));
+      await manager.recordHealthCheck("http://healthy", 50, true);
       await manager.recordHealthCheck("http://flapping", 20, false);
       expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
 
       vi.advanceTimersByTime(2_000);
-      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://flapping", "http://healthy"]);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy", "http://flapping"]);
 
       await manager.recordHealthCheck("http://flapping", 20, false);
       expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
 
-      vi.advanceTimersByTime(1_999);
+      vi.advanceTimersByTime(3_999);
       expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
-      vi.advanceTimersByTime(2_001);
-      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://flapping", "http://healthy"]);
+      vi.advanceTimersByTime(1);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy", "http://flapping"]);
     } finally {
       vi.useRealTimers();
     }
@@ -81,7 +73,6 @@ describe("RpcManager", () => {
     const manager = new RpcManager(["http://slow", "http://fast"], new Logger("error"));
     await manager.recordHealthCheck("http://slow", 700, true);
     await manager.recordHealthCheck("http://fast", 50, true);
-
     expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://fast", "http://slow"]);
     expect(manager.getBestLatencyMs()).toBe(50);
   });
@@ -90,7 +81,6 @@ describe("RpcManager", () => {
     const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
     await manager.recordHealthCheck("http://a", 20, false);
     await manager.recordHealthCheck("http://b", 30, false);
-
     expect(manager.getEndpointsInPriorityOrder()).toEqual([]);
     expect(manager.failover()).toBe("http://b");
   });
