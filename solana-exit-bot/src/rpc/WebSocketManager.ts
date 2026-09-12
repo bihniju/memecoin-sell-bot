@@ -27,6 +27,10 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
   constructor(private readonly endpoints: string | string[], private readonly options: ProviderOptions) {
     super();
     if ((typeof endpoints === "string" ? [endpoints] : endpoints).length === 0) throw new Error("At least one WebSocket endpoint is required");
+    // EventEmitter treats an emitted "error" without a listener as an uncaught
+    // exception. Keep the provider safe for direct/library use while still
+    // allowing applications to attach their own error listener.
+    this.on("error", () => undefined);
   }
 
   private get endpointList(): string[] { return typeof this.endpoints === "string" ? [this.endpoints] : this.endpoints; }
