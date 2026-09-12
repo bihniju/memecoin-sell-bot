@@ -6,12 +6,12 @@ on:
       wallet_public_key:
         description: "Test wallet public key"
         required: true
-        default: "68adSzS2CZised4BTryTKYjEc5MwNaHHE38FpXymeKv7"
+        default: "BoQjeJzpBTFzNyGStuAvDYsrvbwfGhd3Wspw5PLMnY6s"
         type: string
       position_mint:
         description: "Test token mint"
         required: true
-        default: "2BCgn48Y674aunyexfMsCjTeQytcpUDASM28fykFFfS8"
+        default: "EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump"
         type: string
       rpc_url:
         description: "Solana RPC endpoint"
