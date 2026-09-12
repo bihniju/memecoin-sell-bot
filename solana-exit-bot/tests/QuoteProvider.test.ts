@@ -8,9 +8,16 @@ const position: Position = {
   amount: 10,
   amountRaw: 10_000_000n,
   entryPrice: 1,
+  entryValue: 10,
+  entryTimestamp: Date.now(),
   currentPrice: 1,
+  highestPrice: 1,
+  lowestPrice: 1,
+  realizedPnL: 0,
+  unrealizedPnL: 0,
   remainingPercentage: 100,
-  createdAt: Date.now()
+  sellState: "IDLE",
+  completedTakeProfitLevels: new Set()
 };
 
 const response = (status: number, body: unknown): Response =>

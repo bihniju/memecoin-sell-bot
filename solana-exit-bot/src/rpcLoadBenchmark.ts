@@ -39,6 +39,7 @@ function percentile(values: number[], p: number): number {
 }
 
 async function runScenario(rate: number): Promise<ScenarioResult> {
+  const beforeMemory = process.memoryUsage().heapUsed;
   const startedAt = performance.now();
   const deadline = startedAt + durationMs;
   const queue: number[] = [];
@@ -62,7 +63,8 @@ async function runScenario(rate: number): Promise<ScenarioResult> {
   const drain = async (): Promise<void> => {
     while (queue.length > 0 && inFlight.size < concurrency) {
       const executionId = queue.shift()!;
-      const task = service(executionId).finally(() => inFlight.delete(task));
+      let task: Promise<void>;
+      task = service(executionId).finally(() => inFlight.delete(task));
       inFlight.add(task);
       maxInFlight = Math.max(maxInFlight, inFlight.size);
     }
@@ -76,11 +78,10 @@ async function runScenario(rate: number): Promise<ScenarioResult> {
     if (now < nextTick) await sleep(nextTick - now);
     if (performance.now() >= deadline) break;
 
-    const intervalMs = 1000 / rate;
     queue.push(executionId++);
     requested += 1;
     await drain();
-    nextTick += intervalMs;
+    nextTick += 1000 / rate;
   }
 
   while (queue.length > 0 || inFlight.size > 0) {
@@ -92,7 +93,7 @@ async function runScenario(rate: number): Promise<ScenarioResult> {
   const errors = samples.filter((sample) => sample.outcome === "error").length;
   const duplicates = samples.filter((sample) => sample.duplicate).length;
   const latencies = samples.map((sample) => sample.latencyMs);
-  const memoryDeltaMb = (process.memoryUsage().heapUsed / 1024 / 1024);
+  const memoryDeltaMb = (process.memoryUsage().heapUsed - beforeMemory) / 1024 / 1024;
 
   return {
     rate,
@@ -112,8 +113,9 @@ async function runScenario(rate: number): Promise<ScenarioResult> {
 }
 
 async function main(): Promise<void> {
-  if (![10, 25, 50, 100].every((rate) => rates.includes(rate))) throw new Error("Required rates are missing");
-  if (durationMs <= 0 || serviceLatencyMs < 0 || concurrency <= 0) throw new Error("Invalid load-test configuration");
+  if (durationMs <= 0 || serviceLatencyMs < 0 || jitterMs < 0 || errorRate < 0 || errorRate > 1 || concurrency <= 0) {
+    throw new Error("Invalid load-test configuration");
+  }
 
   process.stdout.write("RPC LOAD BENCHMARK — SIMULATION ONLY (NO NETWORK, NO BROADCAST)\n");
   process.stdout.write(`duration=${durationMs}ms service=${serviceLatencyMs}ms±${jitterMs}ms concurrency=${concurrency} errorRate=${errorRate}\n\n`);

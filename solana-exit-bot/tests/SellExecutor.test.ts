@@ -112,7 +112,7 @@ describe("SellExecutor", () => {
     pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
     const quote: Quote = { provider: "test", inAmount: 100n, expectedOutAmount: 90n, minimumOutAmount: 80n, priceImpactBps: 300, routeAvailable: true, routeInfo: {}, timestamp: Date.now() };
     const transport = new TestTransport("unknown"); const builder = new TestBuilder(); const reconciler = new TestReconciler("PARTIALLY_SOLD");
-    const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), builder, new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"), Keypair.generate(), reconciler as PositionReconciler);
+    const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), builder, new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"), Keypair.generate(), reconciler as unknown as PositionReconciler);
     executor.enqueue(decision, "m"); await new Promise((r) => setTimeout(r, 50));
     expect(reconciler.calls).toBe(1); expect(builder.builds).toBe(1); expect(transport.sends).toBe(1); expect(pm.get("m")?.sellState).toBe("PARTIALLY_SOLD");
   });
@@ -122,7 +122,7 @@ describe("SellExecutor", () => {
     pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
     const quote: Quote = { provider: "test", inAmount: 100n, expectedOutAmount: 90n, minimumOutAmount: 80n, priceImpactBps: 300, routeAvailable: true, routeInfo: {}, timestamp: Date.now() };
     const transport = new TestTransport("unknown"); const builder = new TestBuilder(); const reconciler = new TestReconciler("AMBIGUOUS");
-    const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), builder, new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"), Keypair.generate(), reconciler as PositionReconciler);
+    const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), builder, new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"), Keypair.generate(), reconciler as unknown as PositionReconciler);
     executor.enqueue(decision, "m"); await new Promise((r) => setTimeout(r, 50));
     expect(reconciler.calls).toBe(1); expect(builder.builds).toBe(1); expect(transport.sends).toBe(1); expect(pm.get("m")?.sellState).toBe("UNKNOWN");
   });

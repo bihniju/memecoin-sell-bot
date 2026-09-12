@@ -52,7 +52,7 @@ const fakeRpc = (
 describe("PositionReconciler", () => {
   test("marks a position SOLD when the signature is confirmed and the expected token amount disappeared", async () => {
     const position = makePosition();
-    const result = await new PositionReconciler(fakeRpc(0)).reconcile(position, 1_000_000n, "sig");
+    const result = await new PositionReconciler(fakeRpc(0n)).reconcile(position, 1_000_000n, "sig");
     expect(result).toBe("SOLD");
     expect(position.remainingPercentage).toBe(0);
     expect(position.sellState).toBe("SOLD");
