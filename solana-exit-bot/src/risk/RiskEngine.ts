@@ -39,11 +39,15 @@ export class RiskEngine {
     const fallingSignal = this.fallingDetector.evaluate(prices, liquidity);
     const decisions: TriggerDecision[] = [];
 
-    if (emergencyFlag || (marketDataStale && this.config.emergencyOnStaleMarket) || (rpcCongested && this.config.emergencyOnCongestion)) {
+    // RPC congestion is an execution problem, not proof that the asset is collapsing.
+    // Escalate fees/fail over first. Only combine congestion with stale market data
+    // for an emergency because selling from an obsolete price is otherwise unsafe.
+    const congestionWithStaleMarket = rpcCongested && marketDataStale && this.config.emergencyOnCongestion;
+    if (emergencyFlag || (marketDataStale && this.config.emergencyOnStaleMarket) || congestionWithStaleMarket) {
       const reasons = [
         emergencyFlag ? "external emergency" : "",
         marketDataStale && this.config.emergencyOnStaleMarket ? "market data stale" : "",
-        rpcCongested && this.config.emergencyOnCongestion ? "RPC congested" : ""
+        congestionWithStaleMarket ? "RPC congested while market data is stale" : ""
       ].filter(Boolean).join(", ");
       decisions.push(this.make(position, "EMERGENCY", `Emergency exit: ${reasons}`, 100, 100));
     }
