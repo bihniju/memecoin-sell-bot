@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Logger } from "../src/logging/Logger.js";
 import { RpcManager } from "../src/rpc/RpcManager.js";
 
@@ -53,6 +53,37 @@ describe("RpcManager", () => {
 
     expect(manager.getEndpointsInPriorityOrder()[0]).toBe("http://a");
     expect(manager.getBestLatencyMs()).toBe(15);
+  });
+
+  test("repeated failures increase cooldown and prevent flapping", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RpcManager(["http://flapping", "http://healthy"], new Logger("error"));
+      await manager.recordHealthCheck("http://flapping", 20, false);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+
+      vi.advanceTimersByTime(2_000);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://flapping", "http://healthy"]);
+
+      await manager.recordHealthCheck("http://flapping", 20, false);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+
+      vi.advanceTimersByTime(1_999);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+      vi.advanceTimersByTime(2_001);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://flapping", "http://healthy"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("healthy endpoint is preferred by latency after recovery", async () => {
+    const manager = new RpcManager(["http://slow", "http://fast"], new Logger("error"));
+    await manager.recordHealthCheck("http://slow", 700, true);
+    await manager.recordHealthCheck("http://fast", 50, true);
+
+    expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://fast", "http://slow"]);
+    expect(manager.getBestLatencyMs()).toBe(50);
   });
 
   test("returns the active endpoint when all endpoints are unavailable", async () => {
