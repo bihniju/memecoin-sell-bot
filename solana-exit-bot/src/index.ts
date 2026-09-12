@@ -33,8 +33,14 @@ const rpcManager = new RpcManager(
   logger
 );
 
-const quoteProvider: QuoteProvider = config.mode === "paper" ? new SimulatedQuoteProvider() : new JupiterQuoteProvider(config.market.quoteApiUrl);
-const txBuilder = new JupiterSellTransactionBuilder(config.market.swapApiUrl, config.mode !== "live");
+const quoteProvider: QuoteProvider = config.mode === "paper"
+  ? new SimulatedQuoteProvider()
+  : new JupiterQuoteProvider(config.market.quoteApiUrl, config.market.jupiterApiKey);
+const txBuilder = new JupiterSellTransactionBuilder(
+  config.market.swapApiUrl,
+  config.mode !== "live",
+  config.market.jupiterApiKey
+);
 const transport = new SolanaTransactionTransport(rpcManager, {
   skipPreflight: config.execution.skipPreflight,
   maxRetries: config.execution.maxRpcSendRetries,
@@ -127,9 +133,7 @@ normalizer.on("quoteUnavailable", (event) => {
     hasValidRoute: false,
     priceImpactBps: config.risk.maxPriceImpactBps + 1
   });
-  if (decision) {
-    sellExecutor.enqueue(decision, event.mint, event.marketEventAt);
-  }
+  if (decision) sellExecutor.enqueue(decision, event.mint, event.marketEventAt);
 });
 
 wsProvider.on("marketEvent", (event: { receivedAt: number }) => {
