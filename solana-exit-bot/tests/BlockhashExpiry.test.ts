@@ -33,12 +33,17 @@ describe("blockhash expiry and execution attempts", () => {
     expect(sends).toBe(0);
   });
 
-  test("confirms a transaction before treating an observed expired block height as expired", async () => {
+  test("rechecks signature after expiry and accepts a transaction that landed", async () => {
     let blockHeight = 50;
+    let statusChecks = 0;
     const connection = {
       rpcEndpoint: "http://a",
       async sendRawTransaction() { return "sig-landed"; },
-      async getSignatureStatus() { return { value: { err: null, confirmationStatus: "confirmed" } }; },
+      async getSignatureStatus() {
+        statusChecks += 1;
+        if (statusChecks === 1) return { value: null };
+        return { value: { err: null, confirmationStatus: "confirmed" } };
+      },
       async getBlockHeight() { return blockHeight; }
     };
     const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
@@ -49,6 +54,20 @@ describe("blockhash expiry and execution attempts", () => {
 
     blockHeight = 999;
     expect(await transport.confirm(sent.signature, tx)).toBe("confirmed");
+    expect(statusChecks).toBe(2);
+  });
+
+  test("returns finalized when the transaction reaches finalized commitment", async () => {
+    const connection = {
+      rpcEndpoint: "http://a",
+      async sendRawTransaction() { return "sig-finalized"; },
+      async getSignatureStatus() { return { value: { err: null, confirmationStatus: "finalized" } }; }
+    };
+    const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
+      skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 100
+    });
+    const sent = await transport.send(baseTx);
+    expect(await transport.confirm(sent.signature)).toBe("finalized");
   });
 
   test("returns expired only when the transaction is absent after blockhash expiry", async () => {
@@ -79,5 +98,13 @@ describe("blockhash expiry and execution attempts", () => {
     expect(tracker.attempt.expiryDetectedAt).toBe(3);
     expect(tracker.attempt.rebuildCount).toBe(1);
     expect(tracker.attempt.lastValidBlockHeight).toBe(100);
+  });
+
+  test("records failed attempts without populating confirmedAt", () => {
+    const tracker = new ExecutionAttemptTracker({ executionId: "exec-2", positionId: "mint-2", trigger: "HARD_STOP_LOSS" });
+    tracker.markFailed(42);
+    expect(tracker.attempt.status).toBe("FAILED");
+    expect(tracker.attempt.failedAt).toBe(42);
+    expect(tracker.attempt.confirmedAt).toBeUndefined();
   });
 });
