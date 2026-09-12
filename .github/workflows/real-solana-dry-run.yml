@@ -67,6 +67,14 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Print dry-run target
+        run: |
+          echo "DRY_RUN=true"
+          echo "LIVE_TRADING_ENABLED=false"
+          echo "WALLET_PUBLIC_KEY=$WALLET_PUBLIC_KEY"
+          echo "POSITION_MINT=$POSITION_MINT"
+          echo "RPC_ENDPOINTS=$RPC_ENDPOINTS"
+
       - name: Run real mainnet dry-run
         run: npm run dry-run:real
 
