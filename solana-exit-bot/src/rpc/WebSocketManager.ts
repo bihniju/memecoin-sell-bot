@@ -88,7 +88,13 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
     if (!this.ws) return;
     await new Promise<void>((resolve) => {
       const ws = this.ws;
-      const done = () => { ws?.removeListener("close", done); resolve(); };
+      let finished = false;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        ws?.removeListener("close", done);
+        resolve();
+      };
       ws.once("close", done);
       ws.close();
       setTimeout(done, 1_000);
@@ -109,14 +115,27 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
     const params = parsed.params as { result?: unknown; subscription?: number } | undefined;
     if (!params) return;
 
+    const subscriptionId = params.subscription;
+    const subscription = typeof subscriptionId === "number"
+      ? [...this.subscriptions.values()].find((item) => item.id === subscriptionId)
+      : undefined;
+    const mint = subscription?.key.startsWith("mint:") ? subscription.key.slice(5) : undefined;
+
     const result = params.result as Record<string, unknown> | undefined;
     if (result && typeof result === "object" && ("value" in result || "context" in result)) {
-      this.emit("marketEvent", { type: "logs", slot: (result.context as { slot?: number } | undefined)?.slot, receivedAt: Date.now(), result });
+      this.emit("marketEvent", {
+        type: "logs",
+        mint,
+        subscription: subscriptionId,
+        slot: (result.context as { slot?: number } | undefined)?.slot,
+        receivedAt: Date.now(),
+        result
+      });
       return;
     }
 
     const slot = result?.slot;
-    if (typeof slot === "number") this.emit("marketEvent", { type: "slot", slot, receivedAt: Date.now() });
+    if (typeof slot === "number") this.emit("marketEvent", { type: "slot", mint, subscription: subscriptionId, slot, receivedAt: Date.now() });
   }
 
   private startHealthTimers(): void {
