@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { Logger } from "../logging/Logger.js";
 import { PositionManager } from "../position/PositionManager.js";
@@ -93,7 +94,13 @@ export class SellExecutor {
       try {
         const riskDecisionAt = Date.now();
         const quoteRequestedAt = Date.now();
-        const quote = await this.quoteProvider.quoteForPosition(current, this.config.market.outputMint, decision.sellPct, this.config.execution.quoteSlippageBps);
+        const quote = await this.quoteProvider.quoteForPosition(
+          current,
+          this.config.market.outputMint,
+          decision.sellPct,
+          this.config.execution.quoteSlippageBps,
+          { fresh: attempt > 1 }
+        );
         const quoteReceivedAt = Date.now();
 
         const quoteValidation = this.validateQuote(current, quote);
@@ -135,10 +142,8 @@ export class SellExecutor {
         timestamps.transactionSignedAt = Date.now();
         const signed = signBuiltTransaction(tx, this.wallet);
         const result = await this.submitAndTrack(signed, current, quote, decision, priorityFeeMicrolamports, timestamps, attempt);
-        if (result.status === "confirmed" || result.status === "unknown") return;
+        if (result.status === "confirmed" || result.status === "finalized" || result.status === "unknown") return;
 
-        // An expired transaction is safe to rebuild because the next retry performs
-        // a completely fresh quote + build. The old serialized transaction is never resent.
         lastFailure = result.reason;
         this.logger.warn("Sell transaction failed; retrying with a fresh execution attempt", {
           mint,
@@ -172,9 +177,9 @@ export class SellExecutor {
     attemptNumber: number
   ): Promise<SellExecutionResult> {
     const executionId = `${position.mint}:${decision.timestamp}:${++this.executionSequence}`;
-    const tracker = new ExecutionAttemptTracker({ executionId, positionId: position.mint, trigger: decision.trigger, rebuildCount: attemptNumber });
+    const tracker = new ExecutionAttemptTracker({ executionId, positionId: position.mint, trigger: decision.trigger, rebuildCount: Math.max(0, attemptNumber - 1) });
     tracker.setTransaction({
-      transactionHash: Buffer.from(tx.serialized).toString("base64"),
+      transactionHash: createHash("sha256").update(tx.serialized).digest("hex"),
       recentBlockhash: tx.recentBlockhash,
       lastValidBlockHeight: tx.lastValidBlockHeight,
       quoteId: tx.quoteId
@@ -187,15 +192,14 @@ export class SellExecutor {
       const { signature, endpoint, duplicate } = await this.transport.send(tx);
       timestamps.transactionSubmittedAt = submittedAt;
       tracker.markSubmitted(endpoint, submittedAt);
-      tracker.markProcessing();
 
       const status = await this.transport.confirm(signature, tx);
       timestamps.confirmationAt = Date.now();
 
-      if (status === "confirmed") {
+      if (status === "confirmed" || status === "finalized") {
         const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(quote.expectedOutAmount) : Number.MAX_VALUE;
         this.positions.applyFill(position.mint, decision.sellPct, expectedOut, signature);
-        tracker.markConfirmed(timestamps.confirmationAt);
+        tracker.markConfirmed(timestamps.confirmationAt, status === "finalized");
       } else if (status === "expired") {
         tracker.markExpired(timestamps.confirmationAt);
       } else if (status === "unknown") {
@@ -213,7 +217,6 @@ export class SellExecutor {
       if (error instanceof TransactionSubmissionUncertainError) {
         timestamps.transactionSubmittedAt = submittedAt;
         tracker.markSubmitted(error.endpoint, submittedAt);
-        tracker.markProcessing();
         tracker.markUnknown();
         this.positions.setSellState(position.mint, "UNKNOWN");
         this.logger.warn("execution_attempt_uncertain", {
@@ -258,7 +261,7 @@ export class SellExecutor {
     quote: Quote,
     priorityFee: number,
     signature: string,
-    status: "confirmed" | "failed" | "unknown" | "expired",
+    status: "confirmed" | "finalized" | "failed" | "unknown" | "expired",
     timestamps: ExitLatencyTimestamps,
     rpcEndpoint?: string,
     duplicateSend?: boolean
