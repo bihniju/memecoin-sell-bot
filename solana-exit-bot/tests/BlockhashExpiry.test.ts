@@ -34,17 +34,20 @@ describe("blockhash expiry and execution attempts", () => {
   });
 
   test("confirms a transaction before treating an observed expired block height as expired", async () => {
+    let blockHeight = 50;
     const connection = {
       rpcEndpoint: "http://a",
       async sendRawTransaction() { return "sig-landed"; },
       async getSignatureStatus() { return { value: { err: null, confirmationStatus: "confirmed" } }; },
-      async getBlockHeight() { return 999; }
+      async getBlockHeight() { return blockHeight; }
     };
     const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
       skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 100
     });
     const tx = { ...baseTx, lastValidBlockHeight: 100, recentBlockhash: "hash-a" };
     const sent = await transport.send(tx);
+
+    blockHeight = 999;
     expect(await transport.confirm(sent.signature, tx)).toBe("confirmed");
   });
 
@@ -58,9 +61,9 @@ describe("blockhash expiry and execution attempts", () => {
     const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
       skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 100
     });
-    const tx = { ...baseTx, lastValidBlockHeight: 100, recentBlockhash: "hash-a" };
-    const sent = await transport.send({ ...tx, lastValidBlockHeight: 200 });
-    const expiredTx = { ...tx, serialized: sent.signature ? tx.serialized : tx.serialized, lastValidBlockHeight: 100 };
+    const tx = { ...baseTx, lastValidBlockHeight: 200, recentBlockhash: "hash-a" };
+    const sent = await transport.send(tx);
+    const expiredTx = { ...tx, lastValidBlockHeight: 100 };
     expect(await transport.confirm(sent.signature, expiredTx)).toBe("expired");
   });
 
