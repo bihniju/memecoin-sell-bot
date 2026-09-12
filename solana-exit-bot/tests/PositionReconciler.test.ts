@@ -42,7 +42,6 @@ describe("PositionReconciler", () => {
   test("marks a position SOLD when the exact expected token amount disappeared", async () => {
     const position = makePosition();
     const result = await new PositionReconciler(fakeRpc(0)).reconcile(position, 1_000_000n, "sig");
-
     expect(result).toBe("SOLD");
     expect(position.remainingPercentage).toBe(0);
     expect(position.sellState).toBe("SOLD");
@@ -52,7 +51,6 @@ describe("PositionReconciler", () => {
   test("marks a position PARTIALLY_SOLD when the exact expected amount was reduced", async () => {
     const position = makePosition();
     const result = await new PositionReconciler(fakeRpc(400_000n)).reconcile(position, 600_000n, "sig");
-
     expect(result).toBe("PARTIALLY_SOLD");
     expect(position.remainingPercentage).toBe(40);
     expect(position.sellState).toBe("PARTIALLY_SOLD");
@@ -61,7 +59,6 @@ describe("PositionReconciler", () => {
   test("keeps UNKNOWN when the observed balance does not match the expected sell", async () => {
     const position = makePosition();
     const result = await new PositionReconciler(fakeRpc(300_000n)).reconcile(position, 600_000n, "sig");
-
     expect(result).toBe("AMBIGUOUS");
     expect(position.sellState).toBe("UNKNOWN");
     expect(position.remainingPercentage).toBe(100);
@@ -70,8 +67,40 @@ describe("PositionReconciler", () => {
   test("returns UNAVAILABLE when the RPC cannot read token balance", async () => {
     const position = makePosition();
     const result = await new PositionReconciler(fakeRpc(0n, true)).reconcile(position, 1_000_000n, "sig");
-
     expect(result).toBe("UNAVAILABLE");
     expect(position.sellState).toBe("UNKNOWN");
+  });
+
+  test("fails over to a second RPC endpoint after the first balance lookup times out", async () => {
+    const position = makePosition();
+    let firstCalls = 0;
+    let secondCalls = 0;
+    const first = { getParsedTokenAccountsByOwner: vi.fn(async () => { firstCalls += 1; throw new Error("ETIMEDOUT"); }) };
+    const second = { getParsedTokenAccountsByOwner: vi.fn(async () => { secondCalls += 1; return { value: [{ account: { data: { parsed: { info: { tokenAmount: { amount: "0" } } } } } }] }; }) };
+    const manager = {
+      getEndpointsInPriorityOrder: () => ["http://rpc-a", "http://rpc-b"],
+      getActiveEndpoint: () => "http://rpc-a",
+      getConnection: (endpoint: string) => endpoint === "http://rpc-a" ? first : second,
+      recordHealthCheck: vi.fn(async () => undefined)
+    };
+    const result = await new PositionReconciler(manager as never).reconcile(position, 1_000_000n, "sig-failover");
+    expect(result).toBe("SOLD");
+    expect(firstCalls).toBe(1);
+    expect(secondCalls).toBe(1);
+    expect(position.sellSignature).toBe("sig-failover");
+  });
+
+  test("returns UNAVAILABLE and preserves UNKNOWN when every RPC endpoint fails", async () => {
+    const position = makePosition();
+    const manager = {
+      getEndpointsInPriorityOrder: () => ["http://rpc-a", "http://rpc-b"],
+      getActiveEndpoint: () => "http://rpc-a",
+      getConnection: () => ({ getParsedTokenAccountsByOwner: vi.fn(async () => { throw new Error("HTTP 503 Service Unavailable"); }) }),
+      recordHealthCheck: vi.fn(async () => undefined)
+    };
+    const result = await new PositionReconciler(manager as never).reconcile(position, 1_000_000n, "sig-unavailable");
+    expect(result).toBe("UNAVAILABLE");
+    expect(position.sellState).toBe("UNKNOWN");
+    expect(position.remainingPercentage).toBe(100);
   });
 });
