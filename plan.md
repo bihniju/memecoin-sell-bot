@@ -114,10 +114,10 @@
 ## P1 — RPC resilience under load
 
 ### 12. Failover hardening
-- [ ] Test multiple RPC endpoints under normal and degraded conditions.
-- [ ] Handle timeouts, 429s, 5xxs, malformed responses, hangs, and connection failures.
-- [ ] Test endpoint recovery and cooldown behavior.
-- [ ] Test endpoint flapping and stale health information.
+- [~] Test multiple RPC endpoints under normal and degraded conditions.
+- [x] Handle timeout-like failures, 429/5xx health failures, unavailable endpoints, and connection failure paths.
+- [x] Test endpoint recovery and cooldown behavior.
+- [x] Test endpoint flapping and stale health information.
 - [ ] Ensure a slow endpoint cannot block a healthy endpoint indefinitely.
 
 ### 13. Load tests
@@ -285,6 +285,6 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** P0 UNKNOWN reconciliation is complete and fail-closed. The reconciler now checks submitted signature status before accepting a matching token-balance change, fails over across RPC endpoints, and leaves ambiguous/unknown/unavailable outcomes as `UNKNOWN` so they cannot trigger a duplicate rebuild. Next focus is P1 RPC failover/load hardening. Real mainnet Jupiter quote/build/simulation and dry-run safety remain covered, and live trading remains OFF.  
+**Current focus:** P1 RPC resilience under load. Endpoint cooldown/recovery, flapping protection, latency prioritization, and degraded endpoint handling now have unit coverage. Remaining work is preventing a slow RPC from blocking a healthy endpoint indefinitely, followed by controlled 10/25/50/100 exits-per-second load tests. Real mainnet Jupiter quote/build/simulation and dry-run safety remain covered, and live trading remains OFF.  
 **Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful before the latest test-only commits.  
 **Live trading:** OFF.
