@@ -42,6 +42,7 @@
 - [x] Check signature history/status before creating another transaction.
 - [x] Reconcile token balance/position state where required.
 - [x] Never rebuild while the previous execution could still have landed without first reconciling.
+- [x] Fail closed when signature or balance reconciliation is unavailable/ambiguous.
 
 ### 6. Safe rebuild flow
 - [x] Rebuild only after the previous attempt is known expired/absent and reconciliation permits it.
@@ -63,6 +64,8 @@
 - [x] Old serialized transaction is never resent after expiry.
 - [x] UNKNOWN confirmation is reconciled before terminal position state is accepted.
 - [x] Ambiguous/unavailable reconciliation remains UNKNOWN and cannot trigger a rebuild.
+- [x] Signature failure cannot be mistaken for a successful sell.
+- [x] Signature lookup failure can fail over to another RPC endpoint.
 
 ## P0 — Real Solana/Jupiter dry-run
 
@@ -123,6 +126,8 @@
 - [ ] Benchmark 50 exits/sec.
 - [ ] Benchmark 100 exits/sec.
 - [ ] Measure queue growth, latency, errors, duplicate prevention, and memory usage.
+
+## P1 — Confirmation resilience
 
 ### 14. Confirmation resilience
 - [ ] Reduce dependence on fixed 200ms confirmation polling.
@@ -280,6 +285,6 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** P0 UNKNOWN reconciliation is now explicitly fail-closed: UNKNOWN confirmation is reconciled through the position reconciler before terminal state acceptance; ambiguous/unavailable reconciliation remains UNKNOWN and cannot trigger a rebuild. RPC failure-path coverage is in place. Next focus is P1 RPC failover/load hardening. Real mainnet Jupiter quote/build/simulation and dry-run safety remain covered, and live trading remains OFF.  
+**Current focus:** P0 UNKNOWN reconciliation is complete and fail-closed. The reconciler now checks submitted signature status before accepting a matching token-balance change, fails over across RPC endpoints, and leaves ambiguous/unknown/unavailable outcomes as `UNKNOWN` so they cannot trigger a duplicate rebuild. Next focus is P1 RPC failover/load hardening. Real mainnet Jupiter quote/build/simulation and dry-run safety remain covered, and live trading remains OFF.  
 **Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful before the latest test-only commits.  
 **Live trading:** OFF.
