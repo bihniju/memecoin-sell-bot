@@ -1,0 +1,25 @@
+{
+  "name": "solana-exit-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/src/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "paper": "MODE=paper tsx src/index.ts",
+    "dry-run": "MODE=dry-run DRY_RUN=true tsx src/index.ts",
+    "live": "MODE=live DRY_RUN=false tsx src/index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.7",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.6"
+  }
+}
