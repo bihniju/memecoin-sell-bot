@@ -82,8 +82,9 @@ export const loadConfig = (): BotConfig => {
     },
     market: {
       outputMint: process.env.OUTPUT_MINT ?? DEFAULT_SOL_MINT,
-      quoteApiUrl: process.env.QUOTE_API_URL ?? "https://quote-api.jup.ag/v6/quote",
-      swapApiUrl: process.env.SWAP_API_URL ?? "https://quote-api.jup.ag/v6/swap",
+      quoteApiUrl: process.env.QUOTE_API_URL ?? "https://api.jup.ag/swap/v1/quote",
+      swapApiUrl: process.env.SWAP_API_URL ?? "https://api.jup.ag/swap/v1/swap",
+      jupiterApiKey: process.env.JUPITER_API_KEY,
       websocketProvider: (process.env.WEBSOCKET_PROVIDER as "solana" | "helius") ?? "solana",
       sampleDebounceMs: num(process.env.SAMPLE_DEBOUNCE_MS, 150),
       heartbeatMs: num(process.env.WS_HEARTBEAT_MS, 15_000)
