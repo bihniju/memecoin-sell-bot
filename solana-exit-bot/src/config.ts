@@ -51,7 +51,10 @@ export const loadConfig = (): BotConfig => {
       takeProfitEnabled: bool(process.env.TAKE_PROFIT_ENABLED, true),
       takeProfitLevels,
       maxPriceImpactBps: num(process.env.MAX_PRICE_IMPACT_BPS, 1500),
-      decisionCooldownMs: num(process.env.DECISION_COOLDOWN_MS, 500)
+      decisionCooldownMs: num(process.env.DECISION_COOLDOWN_MS, 500),
+      emergencyOnStaleMarket: bool(process.env.EMERGENCY_ON_STALE_MARKET, true),
+      staleMarketMs: num(process.env.STALE_MARKET_MS, 1500),
+      emergencyOnCongestion: bool(process.env.EMERGENCY_ON_CONGESTION, true)
     },
     execution: {
       maxSellRetries: num(process.env.MAX_SELL_RETRIES, 3),
@@ -65,7 +68,11 @@ export const loadConfig = (): BotConfig => {
       skipPreflight: bool(process.env.SKIP_PREFLIGHT, false),
       maxRpcSendRetries: num(process.env.RPC_MAX_RETRIES, 2),
       confirmationTimeoutMs: num(process.env.CONFIRMATION_TIMEOUT_MS, 30_000),
-      simulationLatencyMs: num(process.env.SIMULATION_LATENCY_MS, 50)
+      simulationLatencyMs: num(process.env.SIMULATION_LATENCY_MS, 50),
+      quoteRequestTimeoutMs: num(process.env.QUOTE_REQUEST_TIMEOUT_MS, 900),
+      quoteRetries: num(process.env.QUOTE_RETRIES, 2),
+      congestionRetryDelayMs: num(process.env.CONGESTION_RETRY_DELAY_MS, 50),
+      congestionLatencyMs: num(process.env.CONGESTION_LATENCY_MS, 800)
     },
     rpc: {
       network: process.env.NETWORK ?? "mainnet-beta",
@@ -74,7 +81,9 @@ export const loadConfig = (): BotConfig => {
       staleMarketMs: num(process.env.STALE_MARKET_MS, 1500),
       heliusApiKey: process.env.HELIUS_API_KEY,
       heliusRpcUrl: process.env.HELIUS_RPC_URL,
-      heliusWsUrl: process.env.HELIUS_WS_URL
+      heliusWsUrl: process.env.HELIUS_WS_URL,
+      healthCheckIntervalMs: num(process.env.RPC_HEALTH_INTERVAL_MS, 2000),
+      endpointCooldownMs: num(process.env.RPC_ENDPOINT_COOLDOWN_MS, 3000)
     },
     wallet: {
       walletKeypairPath: process.env.WALLET_KEYPAIR_PATH,
@@ -86,8 +95,8 @@ export const loadConfig = (): BotConfig => {
       swapApiUrl: process.env.SWAP_API_URL ?? "https://api.jup.ag/swap/v1/swap",
       jupiterApiKey: process.env.JUPITER_API_KEY,
       websocketProvider: (process.env.WEBSOCKET_PROVIDER as "solana" | "helius") ?? "solana",
-      sampleDebounceMs: num(process.env.SAMPLE_DEBOUNCE_MS, 150),
-      heartbeatMs: num(process.env.WS_HEARTBEAT_MS, 15_000)
+      sampleDebounceMs: num(process.env.SAMPLE_DEBOUNCE_MS, 100),
+      heartbeatMs: num(process.env.WS_HEARTBEAT_MS, 10_000)
     }
   };
 };
