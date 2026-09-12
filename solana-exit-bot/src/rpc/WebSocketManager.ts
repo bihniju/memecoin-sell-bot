@@ -110,6 +110,10 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
       socket.on("close", () => {
         this.connected = false;
         this.emit("disconnected", { endpoint });
+        if (!settled) {
+          fail(new Error(`WebSocket closed before open: ${endpoint}`));
+          return;
+        }
         if (!this.manualClose) {
           this.endpointIndex = (this.endpointIndex + 1) % this.endpointList.length;
           this.scheduleReconnect();
