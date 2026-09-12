@@ -22,6 +22,8 @@ export interface RiskInput {
   hasValidRoute: boolean;
   priceImpactBps?: number;
   emergencyFlag?: boolean;
+  marketDataStale?: boolean;
+  rpcCongested?: boolean;
 }
 
 export class RiskEngine {
@@ -33,12 +35,17 @@ export class RiskEngine {
   }
 
   evaluate(input: RiskInput): TriggerDecision | undefined {
-    const { position, prices, liquidity, hasValidRoute, priceImpactBps, emergencyFlag } = input;
+    const { position, prices, liquidity, hasValidRoute, priceImpactBps, emergencyFlag, marketDataStale, rpcCongested } = input;
     const fallingSignal = this.fallingDetector.evaluate(prices, liquidity);
     const decisions: TriggerDecision[] = [];
 
-    if (emergencyFlag) {
-      decisions.push(this.make(position, "EMERGENCY", "External emergency flag", 100, 100));
+    if (emergencyFlag || (marketDataStale && this.config.emergencyOnStaleMarket) || (rpcCongested && this.config.emergencyOnCongestion)) {
+      const reasons = [
+        emergencyFlag ? "external emergency" : "",
+        marketDataStale && this.config.emergencyOnStaleMarket ? "market data stale" : "",
+        rpcCongested && this.config.emergencyOnCongestion ? "RPC congested" : ""
+      ].filter(Boolean).join(", ");
+      decisions.push(this.make(position, "EMERGENCY", `Emergency exit: ${reasons}`, 100, 100));
     }
 
     if (!hasValidRoute) {
@@ -52,8 +59,7 @@ export class RiskEngine {
     if (this.config.fallingMarketEnabled && fallingSignal.score >= this.config.riskScoreEmergency) {
       decisions.push(this.make(position, "RAPID_DECLINE", `Risk score ${fallingSignal.score}`, fallingSignal.score, 100));
     } else if (
-      this.config.earlyExitEnabled &&
-      this.config.fallingMarketEnabled &&
+      this.config.earlyExitEnabled && this.config.fallingMarketEnabled &&
       (fallingSignal.score >= this.config.riskScoreHigh || fallingSignal.shortDropPct >= this.config.earlyExitPct)
     ) {
       decisions.push(this.make(position, "RAPID_DECLINE", `Early decline score ${fallingSignal.score}`, fallingSignal.score, 100));
@@ -63,33 +69,22 @@ export class RiskEngine {
       decisions.push(this.make(position, "HARD_STOP_LOSS", `Stop loss ${this.config.stopLossPct}% reached`, fallingSignal.score, 100));
     }
 
-    if (
-      this.config.trailingStopEnabled &&
-      shouldTriggerTrailingStop(position, this.config.trailingActivationPct, this.config.trailingStopPct)
-    ) {
+    if (this.config.trailingStopEnabled && shouldTriggerTrailingStop(position, this.config.trailingActivationPct, this.config.trailingStopPct)) {
       decisions.push(this.make(position, "TRAILING_STOP", "Trailing stop triggered", fallingSignal.score, 100));
     }
 
     if (this.config.takeProfitEnabled) {
       const tp = nextTakeProfitTrigger(position, this.config.takeProfitLevels);
-      if (tp) {
-        decisions.push(
-          this.make(position, "TAKE_PROFIT", `Take profit ${tp.level.id} reached at ${tp.currentProfitPct.toFixed(2)}%`, fallingSignal.score, tp.level.sellPct)
-        );
-      }
+      if (tp) decisions.push(this.make(position, "TAKE_PROFIT", `Take profit ${tp.level.id} reached at ${tp.currentProfitPct.toFixed(2)}%`, fallingSignal.score, tp.level.sellPct));
     }
 
     if (decisions.length === 0) return;
     decisions.sort((a, b) => priority.indexOf(a.trigger) - priority.indexOf(b.trigger));
-
     const selected = decisions[0];
     const key = `${position.mint}:${selected.trigger}`;
     const previous = this.recentTriggers.get(key);
-    if (previous && Date.now() - previous < this.config.decisionCooldownMs) {
-      return;
-    }
+    if (previous && Date.now() - previous < this.config.decisionCooldownMs) return;
     this.recentTriggers.set(key, Date.now());
-
     return selected;
   }
 
