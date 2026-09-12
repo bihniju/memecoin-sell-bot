@@ -1,0 +1,63 @@
+import dotenv from "dotenv";
+dotenv.config();
+const bool = (v, fallback) => {
+    if (v === undefined)
+        return fallback;
+    return v.toLowerCase() === "true";
+};
+const num = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+};
+const arr = (...vals) => vals.filter((v) => Boolean(v && v.trim()));
+export const loadConfig = () => {
+    const mode = process.env.MODE ?? "paper";
+    const takeProfitLevels = [
+        { id: "tp1", profitPct: num(process.env.TAKE_PROFIT_1_PCT, 20), sellPct: num(process.env.TAKE_PROFIT_1_SELL_PCT, 25) },
+        { id: "tp2", profitPct: num(process.env.TAKE_PROFIT_2_PCT, 40), sellPct: num(process.env.TAKE_PROFIT_2_SELL_PCT, 25) }
+    ];
+    return {
+        mode,
+        dryRun: bool(process.env.DRY_RUN, mode !== "live"),
+        logLevel: process.env.LOG_LEVEL ?? "info",
+        walletKeypairPath: process.env.WALLET_KEYPAIR_PATH,
+        risk: {
+            stopLossEnabled: bool(process.env.STOP_LOSS_ENABLED, true),
+            stopLossPct: num(process.env.STOP_LOSS_PCT, 5),
+            earlyExitEnabled: bool(process.env.EARLY_EXIT_ENABLED, true),
+            earlyExitPct: num(process.env.EARLY_EXIT_PCT, 2),
+            fallingMarketEnabled: bool(process.env.FALLING_MARKET_ENABLED, true),
+            fallingWindowMs: num(process.env.FALLING_WINDOW_MS, 3000),
+            fallingDropPct: num(process.env.FALLING_DROP_PCT, 1.5),
+            consecutiveLowerTicks: num(process.env.CONSECUTIVE_LOWER_TICKS, 3),
+            riskScoreWarning: num(process.env.RISK_SCORE_WARNING, 40),
+            riskScoreHigh: num(process.env.RISK_SCORE_HIGH, 60),
+            riskScoreEmergency: num(process.env.RISK_SCORE_EMERGENCY, 80),
+            fallingWeightPriceDrop: num(process.env.FALLING_WEIGHT_PRICE_DROP, 40),
+            fallingWeightLowerTicks: num(process.env.FALLING_WEIGHT_LOWER_TICKS, 20),
+            fallingWeightAcceleration: num(process.env.FALLING_WEIGHT_ACCELERATION, 20),
+            fallingWeightVolumeImbalance: num(process.env.FALLING_WEIGHT_VOLUME_IMBALANCE, 10),
+            fallingWeightLiquidity: num(process.env.FALLING_WEIGHT_LIQUIDITY, 10),
+            trailingStopEnabled: bool(process.env.TRAILING_STOP_ENABLED, true),
+            trailingActivationPct: num(process.env.TRAILING_ACTIVATION_PCT, 20),
+            trailingStopPct: num(process.env.TRAILING_STOP_PCT, 8),
+            takeProfitEnabled: bool(process.env.TAKE_PROFIT_ENABLED, true),
+            takeProfitLevels,
+            maxPriceImpactBps: num(process.env.MAX_PRICE_IMPACT_BPS, 1500)
+        },
+        execution: {
+            maxSellRetries: num(process.env.MAX_SELL_RETRIES, 3),
+            priorityFeeEnabled: bool(process.env.PRIORITY_FEE_ENABLED, true),
+            priorityFeeMode: process.env.PRIORITY_FEE_MODE ?? "dynamic",
+            minPriorityFeeMicrolamports: num(process.env.MIN_PRIORITY_FEE_MICROLAMPORTS, 1000),
+            maxPriorityFeeMicrolamports: num(process.env.MAX_PRIORITY_FEE_MICROLAMPORTS, 50000),
+            emergencyPriorityFeeMicrolamports: num(process.env.EMERGENCY_PRIORITY_FEE_MICROLAMPORTS, 100000)
+        },
+        rpc: {
+            network: process.env.NETWORK ?? "mainnet-beta",
+            rpcEndpoints: arr(process.env.RPC_ENDPOINT, process.env.RPC_ENDPOINT_2, process.env.RPC_ENDPOINT_3),
+            websocketEndpoints: arr(process.env.WEBSOCKET_ENDPOINT, process.env.WEBSOCKET_ENDPOINT_2),
+            staleMarketMs: num(process.env.STALE_MARKET_MS, 1500)
+        }
+    };
+};
