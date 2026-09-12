@@ -62,7 +62,7 @@ export interface ExecutionConfig {
   maxSellRetries: number; priorityFeeEnabled: boolean; priorityFeeMode: "dynamic" | "fixed" | "emergency";
   minPriorityFeeMicrolamports: number; maxPriorityFeeMicrolamports: number; emergencyPriorityFeeMicrolamports: number;
   quoteSlippageBps: number; quoteStaleMs: number; skipPreflight: boolean; maxRpcSendRetries: number; confirmationTimeoutMs: number; simulationLatencyMs: number;
-  quoteRequestTimeoutMs?: number; quoteRetries?: number; congestionRetryDelayMs?: number; congestionLatencyMs?: number;
+  quoteRequestTimeoutMs?: number; quoteRetries?: number; congestionRetryDelayMs?: number; congestionLatencyMs?: number; rpcSendTimeoutMs?: number;
 }
 export interface RpcConfig {
   network: string; rpcEndpoints: string[]; websocketEndpoints: string[]; staleMarketMs: number; heliusApiKey?: string; heliusRpcUrl?: string; heliusWsUrl?: string;
