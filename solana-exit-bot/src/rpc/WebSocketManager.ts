@@ -84,11 +84,13 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
       let settled = false;
       let timeout: NodeJS.Timeout | undefined;
 
+      const isCurrentSocket = (): boolean => this.ws === socket;
+
       const fail = (error: unknown): void => {
         if (settled) return;
         settled = true;
         if (timeout) clearTimeout(timeout);
-        if (this.ws === socket) this.ws = undefined;
+        if (isCurrentSocket()) this.ws = undefined;
         try { socket.terminate(); } catch { /* best effort */ }
         reject(error instanceof Error ? error : new Error(String(error)));
       };
@@ -105,21 +107,31 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
         this.emit("connected", { endpoint });
         resolve();
       });
-      socket.on("message", (msg) => this.handleMessage(msg.toString()));
-      socket.on("pong", () => { this.lastMessageAt = Date.now(); });
+      socket.on("message", (msg) => {
+        if (!isCurrentSocket()) return;
+        this.handleMessage(msg.toString());
+      });
+      socket.on("pong", () => {
+        if (isCurrentSocket()) this.lastMessageAt = Date.now();
+      });
       socket.on("close", () => {
-        this.connected = false;
-        this.emit("disconnected", { endpoint });
+        if (!isCurrentSocket() && !(!settled && this.ws === undefined)) return;
+        if (isCurrentSocket()) {
+          this.connected = false;
+          this.ws = undefined;
+          this.emit("disconnected", { endpoint });
+        }
         if (!settled) {
           fail(new Error(`WebSocket closed before open: ${endpoint}`));
           return;
         }
-        if (!this.manualClose) {
+        if (!this.manualClose && isCurrentSocket()) {
           this.endpointIndex = (this.endpointIndex + 1) % this.endpointList.length;
           this.scheduleReconnect();
         }
       });
       socket.on("error", (err) => {
+        if (!isCurrentSocket() && settled) return;
         this.emit("error", err);
         fail(err);
       });
