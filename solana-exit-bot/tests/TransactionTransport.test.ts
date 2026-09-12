@@ -102,11 +102,21 @@ describe("TransactionTransport", () => {
     const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
       skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 25
     });
-
     const sent = await transport.send(transaction);
     expect(sent.duplicate).toBe(false);
     expect(sent.signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{80,88}$/);
     expect(sends).toBe(1);
+  });
+
+  test("bounds a hanging RPC send and classifies it as uncertain", async () => {
+    const connection = {
+      rpcEndpoint: "http://slow",
+      async sendRawTransaction() { return await new Promise<string>(() => {}); }
+    };
+    const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
+      skipPreflight: false, maxRetries: 0, confirmationTimeoutMs: 10, sendTimeoutMs: 5
+    });
+    await expect(transport.send(built)).rejects.toBeInstanceOf(TransactionSubmissionUncertainError);
   });
 
   test("does not fail over or blindly resend when a timed-out submission remains unknown", async () => {
@@ -115,19 +125,13 @@ describe("TransactionTransport", () => {
     const transaction = signedBuilt();
     const connectionA = {
       rpcEndpoint: "http://a",
-      async sendRawTransaction() {
-        sendsA += 1;
-        throw new Error("ETIMEDOUT network timeout");
-      },
+      async sendRawTransaction() { sendsA += 1; throw new Error("ETIMEDOUT network timeout"); },
       async getSignatureStatus() { return { value: null }; },
       async getBlockHeight() { return 50; }
     };
     const connectionB = {
       rpcEndpoint: "http://b",
-      async sendRawTransaction() {
-        sendsB += 1;
-        return "sig-should-not-send";
-      },
+      async sendRawTransaction() { sendsB += 1; return "sig-should-not-send"; },
       async getSignatureStatus() { return { value: null }; },
       async getBlockHeight() { return 50; }
     };
@@ -138,10 +142,7 @@ describe("TransactionTransport", () => {
       getConnection: (endpoint: string) => endpoint === "http://a" ? connectionA : connectionB,
       recordHealthCheck: async () => {}
     };
-    const transport = new SolanaTransactionTransport(manager as never, {
-      skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 10
-    });
-
+    const transport = new SolanaTransactionTransport(manager as never, { skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 10 });
     await expect(transport.send(transaction)).rejects.toBeInstanceOf(TransactionSubmissionUncertainError);
     expect(sendsA).toBe(1);
     expect(sendsB).toBe(0);
@@ -152,18 +153,12 @@ describe("TransactionTransport", () => {
     let sendsB = 0;
     const connectionA = {
       rpcEndpoint: "http://429",
-      async sendRawTransaction() {
-        sendsA += 1;
-        throw new Error("HTTP 429 Too Many Requests");
-      },
+      async sendRawTransaction() { sendsA += 1; throw new Error("HTTP 429 Too Many Requests"); },
       async getBlockHeight() { return 50; }
     };
     const connectionB = {
       rpcEndpoint: "http://healthy",
-      async sendRawTransaction() {
-        sendsB += 1;
-        return "sig-429-recovered";
-      }
+      async sendRawTransaction() { sendsB += 1; return "sig-429-recovered"; }
     };
     const manager = {
       getActiveEndpoint: () => "http://429",
@@ -172,10 +167,7 @@ describe("TransactionTransport", () => {
       getConnection: (endpoint: string) => endpoint === "http://429" ? connectionA : connectionB,
       recordHealthCheck: async () => {}
     };
-    const transport = new SolanaTransactionTransport(manager as never, {
-      skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 25
-    });
-
+    const transport = new SolanaTransactionTransport(manager as never, { skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 25 });
     const sent = await transport.send(built);
     expect(sent.signature).toBe("sig-429-recovered");
     expect(sent.endpoint).toBe("http://healthy");
@@ -189,19 +181,13 @@ describe("TransactionTransport", () => {
     const transaction = signedBuilt();
     const connectionA = {
       rpcEndpoint: "http://503",
-      async sendRawTransaction() {
-        sendsA += 1;
-        throw new Error("HTTP 503 Service Unavailable");
-      },
+      async sendRawTransaction() { sendsA += 1; throw new Error("HTTP 503 Service Unavailable"); },
       async getSignatureStatus() { return { value: null }; },
       async getBlockHeight() { return 50; }
     };
     const connectionB = {
       rpcEndpoint: "http://healthy",
-      async sendRawTransaction() {
-        sendsB += 1;
-        return "sig-should-not-send";
-      },
+      async sendRawTransaction() { sendsB += 1; return "sig-should-not-send"; },
       async getSignatureStatus() { return { value: null }; },
       async getBlockHeight() { return 50; }
     };
@@ -212,10 +198,7 @@ describe("TransactionTransport", () => {
       getConnection: (endpoint: string) => endpoint === "http://503" ? connectionA : connectionB,
       recordHealthCheck: async () => {}
     };
-    const transport = new SolanaTransactionTransport(manager as never, {
-      skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 10
-    });
-
+    const transport = new SolanaTransactionTransport(manager as never, { skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 10 });
     await expect(transport.send(transaction)).rejects.toBeInstanceOf(TransactionSubmissionUncertainError);
     expect(sendsA).toBe(1);
     expect(sendsB).toBe(0);
@@ -223,14 +206,8 @@ describe("TransactionTransport", () => {
 
   test("fails closed when every endpoint is unavailable for the pre-broadcast block-height check", async () => {
     const transaction = signedBuilt();
-    const connectionA = {
-      rpcEndpoint: "http://down-a",
-      async getBlockHeight() { throw new Error("fetch failed: endpoint unavailable"); }
-    };
-    const connectionB = {
-      rpcEndpoint: "http://down-b",
-      async getBlockHeight() { throw new Error("ETIMEDOUT"); }
-    };
+    const connectionA = { rpcEndpoint: "http://down-a", async getBlockHeight() { throw new Error("fetch failed: endpoint unavailable"); } };
+    const connectionB = { rpcEndpoint: "http://down-b", async getBlockHeight() { throw new Error("ETIMEDOUT"); } };
     let sends = 0;
     const manager = {
       getActiveEndpoint: () => "http://down-a",
@@ -239,11 +216,8 @@ describe("TransactionTransport", () => {
       getConnection: (endpoint: string) => endpoint === "http://down-a" ? connectionA : connectionB,
       recordHealthCheck: async () => {}
     };
-    const transport = new SolanaTransactionTransport(manager as never, {
-      skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 25
-    });
+    const transport = new SolanaTransactionTransport(manager as never, { skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 25 });
     (connectionA as any).sendRawTransaction = async () => { sends += 1; return "should-not-send"; };
-
     await expect(transport.send(transaction)).rejects.toThrow("Unable to read Solana block height before broadcast");
     expect(sends).toBe(0);
   });
