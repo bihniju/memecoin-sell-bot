@@ -60,24 +60,24 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
 
   private async openSocket(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.endpoint);
-      this.ws = ws;
+      const socket = new WebSocket(this.endpoint);
+      this.ws = socket;
 
-      ws.once("open", () => {
+      socket.once("open", () => {
         this.connected = true;
         this.reconnectAttempts = 0;
         this.lastMessageAt = Date.now();
         this.emit("connected");
         resolve();
       });
-      ws.on("message", (msg) => this.handleMessage(msg.toString()));
-      ws.on("pong", () => { this.lastMessageAt = Date.now(); });
-      ws.on("close", () => {
+      socket.on("message", (msg) => this.handleMessage(msg.toString()));
+      socket.on("pong", () => { this.lastMessageAt = Date.now(); });
+      socket.on("close", () => {
         this.connected = false;
         this.emit("disconnected");
         if (!this.manualClose) this.scheduleReconnect();
       });
-      ws.on("error", (err) => {
+      socket.on("error", (err) => {
         this.emit("error", err);
         if (!this.connected) reject(err);
       });
@@ -85,21 +85,21 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
   }
 
   private async closeSocket(): Promise<void> {
-    if (!this.ws) return;
+    const socket = this.ws;
+    if (!socket) return;
     await new Promise<void>((resolve) => {
-      const ws = this.ws;
       let finished = false;
       const done = () => {
         if (finished) return;
         finished = true;
-        ws?.removeListener("close", done);
+        socket.removeListener("close", done);
         resolve();
       };
-      ws.once("close", done);
-      ws.close();
+      socket.once("close", done);
+      socket.close();
       setTimeout(done, 1_000);
     });
-    this.ws = undefined;
+    if (this.ws === socket) this.ws = undefined;
   }
 
   private handleMessage(raw: string): void {
@@ -169,9 +169,10 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
   }
 
   private async sendRpc(method: string, params: unknown[]): Promise<number> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
+    const socket = this.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
     const id = this.requestId++;
-    this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+    socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     return await new Promise<number>((resolve, reject) => {
       const timeout = setTimeout(() => { this.off(`rpc:${id}`, onMessage); reject(new Error(`WS RPC timeout for ${method}`)); }, 10_000);
       const onMessage = (response: Record<string, unknown>): void => {
