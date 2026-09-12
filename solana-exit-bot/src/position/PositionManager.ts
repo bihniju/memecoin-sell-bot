@@ -35,12 +35,22 @@ export class PositionManager {
   applyFill(mint: string, sellPct: number, outValue: number, signature?: string): Position | undefined {
     const p = this.positions.get(mint);
     if (!p) return;
+
+    // sellPct is the percentage of the position's CURRENT remaining balance to sell.
+    // Keep this consistent with quoteForPosition(), which also derives the amount
+    // from remainingPercentage * sellPct. This prevents a second 50% exit from
+    // incorrectly marking the entire original position as sold.
     const clampedSellPct = Math.max(0, Math.min(100, sellPct));
-    const soldFraction = clampedSellPct / 100;
-    const soldAmount = p.amount * (p.remainingPercentage / 100) * soldFraction;
+    const soldFractionOfRemaining = clampedSellPct / 100;
+    const remainingFraction = p.remainingPercentage / 100;
+    const soldAmount = p.amount * remainingFraction * soldFractionOfRemaining;
     const soldEntryValue = soldAmount * p.entryPrice;
+
     p.realizedPnL += outValue - soldEntryValue;
-    p.remainingPercentage = Math.max(0, p.remainingPercentage - clampedSellPct);
+    p.remainingPercentage = Math.max(
+      0,
+      p.remainingPercentage * (1 - soldFractionOfRemaining)
+    );
     p.sellSignature = signature ?? p.sellSignature;
     p.sellState = p.remainingPercentage <= 0 ? "SOLD" : "PARTIALLY_SOLD";
     p.lastSellAttempt = Date.now();
