@@ -63,7 +63,16 @@ const wsProvider: WebSocketManager = config.market.websocketProvider === "helius
   ? new HeliusWebSocketAdapter(wsEndpoints, config.market.heartbeatMs, staleMarketMs)
   : new SolanaWebSocketAdapter(wsEndpoints, config.market.heartbeatMs, staleMarketMs);
 
-const evaluateRisk = (positionMint: string, overrides: { hasValidRoute?: boolean; priceImpactBps?: number; emergencyFlag?: boolean; marketDataStale?: boolean } = {}) => {
+const evaluateRisk = (
+  positionMint: string,
+  overrides: {
+    hasValidRoute?: boolean;
+    priceImpactBps?: number;
+    emergencyFlag?: boolean;
+    marketDataStale?: boolean;
+    marketEventAt?: number;
+  } = {}
+) => {
   const position = positions.get(positionMint);
   if (!position) return;
   const decision = riskEngine.evaluate({
@@ -78,13 +87,13 @@ const evaluateRisk = (positionMint: string, overrides: { hasValidRoute?: boolean
   });
   if (!decision) return;
   logger.warn("risk_triggered", { mint: positionMint, trigger: decision.trigger, reason: decision.reason, riskScore: decision.riskScore });
-  sellExecutor.enqueue(decision, positionMint, Date.now());
+  sellExecutor.enqueue(decision, positionMint, overrides.marketEventAt ?? Date.now());
 };
 
 priceMonitor.on("tick", (tick) => {
   const p = positions.updatePrice(tick.mint, tick.price);
   if (!p) return;
-  evaluateRisk(tick.mint, { priceImpactBps: tick.priceImpactBps });
+  evaluateRisk(tick.mint, { priceImpactBps: tick.priceImpactBps, marketEventAt: tick.timestamp });
 });
 
 normalizer.on("quoteUnavailable", (event) => evaluateRisk(event.mint, { hasValidRoute: false, priceImpactBps: config.risk.maxPriceImpactBps + 1 }));
@@ -94,7 +103,7 @@ wsProvider.on("stale", (event?: { endpoint?: string; staleMs?: number }) => {
   const observedStaleMs = event?.staleMs ?? staleMarketMs;
   logger.warn("market_data_stale", { endpoint: event?.endpoint ?? defaultWsEndpoint, staleMs: observedStaleMs });
   if (!(config.risk.emergencyOnStaleMarket ?? true) || observedStaleMs < staleMarketMs) return;
-  evaluateRisk(mint, { hasValidRoute: false, emergencyFlag: true, marketDataStale: true });
+  evaluateRisk(mint, { hasValidRoute: false, emergencyFlag: true, marketDataStale: true, marketEventAt: Date.now() - observedStaleMs });
 });
 wsProvider.on("error", (error) => logger.warn("market_ws_error", { error: String(error) }));
 
@@ -108,9 +117,10 @@ if (config.mode === "paper") {
   const synthetic = [1.01, 1.0, 0.99, 0.98, 0.97, 0.95, 0.93];
   for (const [i, price] of synthetic.entries()) {
     setTimeout(() => {
-      void normalizer.handleMarketEvent(Date.now(), mint);
-      priceMonitor.ingest({ mint, price, timestamp: Date.now(), volumeBuy: 50 - i * 4, volumeSell: 50 + i * 8 });
-      liquidityMonitor.ingest({ mint, liquidityUsd: 100000 - i * 8000, timestamp: Date.now() });
+      const timestamp = Date.now();
+      void normalizer.handleMarketEvent(timestamp, mint);
+      priceMonitor.ingest({ mint, price, timestamp, volumeBuy: 50 - i * 4, volumeSell: 50 + i * 8 });
+      liquidityMonitor.ingest({ mint, liquidityUsd: 100000 - i * 8000, timestamp });
     }, i * 250);
   }
 } else {
