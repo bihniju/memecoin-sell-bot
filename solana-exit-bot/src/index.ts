@@ -39,7 +39,8 @@ const txBuilder = new JupiterSellTransactionBuilder(config.market.swapApiUrl, co
 const transport = new SolanaTransactionTransport(rpcManager, {
   skipPreflight: config.execution.skipPreflight,
   maxRetries: config.execution.maxRpcSendRetries,
-  confirmationTimeoutMs: config.execution.confirmationTimeoutMs
+  confirmationTimeoutMs: config.execution.confirmationTimeoutMs,
+  sendTimeoutMs: config.execution.rpcSendTimeoutMs ?? 1500
 });
 const sellExecutor = new SellExecutor(config, positions, quoteProvider, txBuilder, new RetryManager(config.execution), new PriorityFeeManager(config.execution, rpcManager), transport, logger, wallet, positionReconciler);
 const normalizer = new MarketEventNormalizer(quoteProvider, priceMonitor, liquidityMonitor, config.market.sampleDebounceMs);
