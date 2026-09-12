@@ -206,6 +206,78 @@ describe("SellExecutor", () => {
     expect(pm.get("m")?.sellState).toBe("FAILED");
   });
 
+  test("malformed quote safety rejects invalid price impact and output bounds", async () => {
+    const config = baseConfig();
+    const pm = new PositionManager();
+    pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+
+    const quote: Quote = {
+      provider: "test",
+      inAmount: 100n,
+      expectedOutAmount: 90n,
+      minimumOutAmount: 100n,
+      priceImpactBps: Number.NaN,
+      routeAvailable: true,
+      routeInfo: {},
+      timestamp: Date.now()
+    };
+
+    const transport = new TestTransport("confirmed");
+    const executor = new SellExecutor(
+      config,
+      pm,
+      new TestQuoteProvider(quote),
+      new TestBuilder(),
+      new RetryManager(config.execution),
+      new PriorityFeeManager(config.execution),
+      transport,
+      new Logger("error"),
+      Keypair.generate()
+    );
+
+    executor.enqueue(decision, "m");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(transport.sends).toBe(0);
+    expect(pm.get("m")?.sellState).toBe("FAILED");
+  });
+
+  test("future quote timestamps are rejected", async () => {
+    const config = baseConfig();
+    const pm = new PositionManager();
+    pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+
+    const quote: Quote = {
+      provider: "test",
+      inAmount: 100n,
+      expectedOutAmount: 90n,
+      minimumOutAmount: 80n,
+      priceImpactBps: 300,
+      routeAvailable: true,
+      routeInfo: {},
+      timestamp: Date.now() + 10_000
+    };
+
+    const transport = new TestTransport("confirmed");
+    const executor = new SellExecutor(
+      config,
+      pm,
+      new TestQuoteProvider(quote),
+      new TestBuilder(),
+      new RetryManager(config.execution),
+      new PriorityFeeManager(config.execution),
+      transport,
+      new Logger("error"),
+      Keypair.generate()
+    );
+
+    executor.enqueue(decision, "m");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(transport.sends).toBe(0);
+    expect(pm.get("m")?.sellState).toBe("FAILED");
+  });
+
   test("unknown confirmation status sets UNKNOWN", async () => {
     const config = baseConfig();
     const pm = new PositionManager();
