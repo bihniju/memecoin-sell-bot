@@ -70,10 +70,13 @@ describe("high-volume soak", () => {
     ];
 
     let lastDecision: TriggerDecision | undefined;
+    const history: PriceTick[] = [];
     for (const tick of ticks) {
+      history.push(tick);
+      position.currentPrice = tick.price;
       lastDecision = engine.evaluate({
         position,
-        prices: [tick],
+        prices: history,
         liquidity: [],
         hasValidRoute: true,
         priceImpactBps: 100,
