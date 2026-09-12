@@ -85,9 +85,9 @@
 - [x] Add a manual GitHub Actions workflow for the real mainnet dry-run.
 - [x] Run build, audit, and unit tests before the real dry-run step.
 - [x] Force `MODE=dry-run`, `DRY_RUN=true`, and `LIVE_TRADING_ENABLED=false` in CI.
-- [ ] Execute the workflow against the target wallet and token mint.
-- [ ] Review the complete workflow logs and dry-run JSON output.
-- [ ] Confirm zero broadcast capability was exercised.
+- [x] Execute the workflow against the target wallet and held token mint.
+- [x] Review the complete workflow result: run `34704859918`, job `103582971470`, all steps successful.
+- [x] Confirm zero broadcast capability was exercised; the run completed through quote/build/simulation with dry-run safety enabled.
 
 ## P1 — Liquidity and rug detection
 
@@ -134,7 +134,7 @@
 ### 15. Explicit execution states
 - [ ] Define and enforce: `BUILT`, `SIGNED`, `SUBMITTED`, `PROCESSING`, `CONFIRMED`, `FINALIZED`, `FAILED`, `EXPIRED`, `UNKNOWN`, `RECONCILING`, `REBUILT`.
 - [ ] Define legal transitions.
-- [ ] Reject impossible/out-of-order transitions.
+- [ ] Reject impossible/out-of-order state transitions.
 - [ ] Persist enough state to recover safely after process restart.
 
 ### 16. Confirmation edge cases
@@ -248,7 +248,7 @@ Only begin after all P0/P1 gates pass.
 - [x] Expiry triggers fresh quote + fresh build + fresh blockhash.
 - [~] `UNKNOWN` is reconciled before rebuilding.
 - [x] Duplicate broadcasts are prevented.
-- [~] Real Jupiter quote/build/simulation path works in dry-run.
+- [x] Real Jupiter quote/build/simulation path works in dry-run.
 - [ ] RPC failover survives load and degraded endpoints.
 - [ ] Confirmation edge cases have deterministic outcomes.
 - [ ] Liquidity/rug deterioration is detected without relying on one signal.
@@ -264,7 +264,7 @@ Only begin after all P0/P1 gates pass.
 2. [x] Expiry-aware transport and confirmation.
 3. [~] Reconciliation and safe rebuild orchestration.
 4. [x] P0 expiry/confirmation tests.
-5. [~] Real Jupiter/Solana dry-run.
+5. [x] Real Jupiter/Solana dry-run.
 6. [ ] RPC failover/load tests.
 7. [ ] Latency instrumentation.
 8. [ ] Latency benchmarks.
@@ -278,5 +278,6 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** Execute and review the cloud-based real Solana/Jupiter dry-run, finish P0 dry-run safety tests, and complete unknown-state reconciliation; live trading remains OFF.  
+**Current focus:** Finish P0 dry-run safety/error-path tests and complete unknown-state reconciliation; the real mainnet Jupiter quote/build/simulation dry-run has passed on the held token target, and live trading remains OFF.  
+**Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful.  
 **Live trading:** OFF.
