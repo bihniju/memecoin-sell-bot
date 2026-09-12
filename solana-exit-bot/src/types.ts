@@ -22,7 +22,14 @@ export interface Position {
   lastSellAttempt?: number; sellSignature?: string; completedTakeProfitLevels: Set<string>;
 }
 
-export interface PriceTick { mint: string; price: number; timestamp: number; volumeBuy?: number; volumeSell?: number; }
+export interface PriceTick {
+  mint: string;
+  price: number;
+  timestamp: number;
+  volumeBuy?: number;
+  volumeSell?: number;
+  priceImpactBps?: number;
+}
 export interface LiquiditySnapshot { mint: string; liquidityUsd: number; reserveBase?: number; reserveQuote?: number; timestamp: number; }
 export interface TriggerDecision { trigger: ExitTrigger; reason: string; timestamp: number; price: number; entryPrice: number; pnlPct: number; riskScore: number; sellPct: number; }
 export interface FallingSignal { score: number; shortDropPct: number; consecutiveLowerTicks: number; acceleratingDecline: boolean; volumeImbalance: number; liquidityDeterioration: number; }
