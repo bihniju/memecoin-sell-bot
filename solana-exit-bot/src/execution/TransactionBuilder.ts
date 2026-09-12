@@ -100,7 +100,11 @@ export class JupiterSellTransactionBuilder implements SellTransactionBuilder {
         const body = (await res.json()) as { swapTransaction?: string; lastValidBlockHeight?: number };
         const lastValidBlockHeight = body.lastValidBlockHeight;
         if (!body.swapTransaction) throw new Error("Jupiter swap response missing swapTransaction");
-        if (!Number.isInteger(lastValidBlockHeight) || lastValidBlockHeight < 0) {
+        if (
+          typeof lastValidBlockHeight !== "number" ||
+          !Number.isInteger(lastValidBlockHeight) ||
+          lastValidBlockHeight < 0
+        ) {
           throw new Error("Jupiter swap response missing valid lastValidBlockHeight");
         }
 
