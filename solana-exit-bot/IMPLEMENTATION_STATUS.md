@@ -1,38 +1,42 @@
 # Implementation Status
 
-## 1) Already real
+## 1) Implemented and covered by CI
 
-- Risk evaluation pipeline and trigger ordering are implemented and deterministic:
+- Deterministic risk trigger ordering:
   - `EMERGENCY > LIQUIDITY_COLLAPSE > NO_VALID_ROUTE > RAPID_DECLINE > HARD_STOP_LOSS > TRAILING_STOP > TAKE_PROFIT`
-- Position state tracking exists with partial/full fill accounting and PnL updates.
-- Falling-market, trailing-stop, stop-loss, and take-profit logic are implemented.
-- Structured JSON logging exists.
-- Runtime configuration loader exists with `.env` support.
+- Position state tracking with partial/full fill accounting and PnL updates.
+- Falling-market, trailing-stop, hard-stop-loss, take-profit, stale-market, no-route, and liquidity-collapse risk handling.
+- Structured JSON logging.
+- Runtime configuration loader with `.env` support and safety-first defaults (`MODE=paper`, dry-run enabled, live trading explicitly gated).
+- Real Jupiter quote adapter with raw-token-unit amounts, quote freshness controls, transient retries, route detection, price-impact extraction, and direct-route fallback.
+- Real Jupiter swap transaction builder using `@solana/web3.js`, VersionedTransaction deserialization, compute-budget configuration, priority-fee budgeting, signing support, and live/dry-run separation.
+- Real Solana RPC transport for raw transaction submission and signature confirmation.
+- RPC endpoint health scoring, latency tracking, cooldown/failover, congestion measurement, and recent prioritization-fee lookup.
+- Transaction duplicate protection and explicit `unknown` confirmation state when confirmation cannot be established within the configured timeout.
+- Real Solana/Helius WebSocket connection layer with mint log subscriptions, slot subscriptions, heartbeat/stale detection, endpoint rotation, reconnect, and resubscription.
+- `index.ts` wires the real Jupiter/RPC/WebSocket adapters for non-paper modes; synthetic ticks remain isolated to paper mode.
+- CI currently passes TypeScript/build and the automated test suite.
 
-## 2) Currently mocked/scaffolded
+## 2) Still required before calling this production-ready
 
-- `StaticQuoteProvider` in `src/execution/QuoteProvider.ts` computes synthetic quotes from local price state.
-- `InMemoryTransport` in `src/execution/SellExecutor.ts` returns fake signatures and fake confirmation success.
-- `TransactionBuilder` in `src/execution/TransactionBuilder.ts` serializes JSON payloads instead of building real Solana transactions.
-- `WebSocketManager` in `src/rpc/WebSocketManager.ts` is a local placeholder event wrapper (no real Solana WS connection).
-- `RpcManager` in `src/rpc/RpcManager.ts` contains endpoint selection scaffolding but no real RPC send/confirm integration.
-- `src/index.ts` still wires `StaticQuoteProvider` + `InMemoryTransport` + placeholder transaction builder and uses synthetic paper ticks.
+These are hardening and validation tasks, not replacement of the mocked execution path:
 
-## 3) Must be replaced for real exits
+- Add adversarial/stress tests for rug-like route disappearance, extreme price-impact spikes, quote failures, RPC failures, WebSocket outages, congestion, expired blockhashes, delayed confirmations, and unknown transaction state.
+- Add a true end-to-end dry-run test against live Jupiter quotes and real RPC metadata without signing or broadcasting.
+- Add transaction freshness/blockhash handling and rebuild behavior for expired transactions.
+- Improve confirmation latency by using signature subscriptions/parallel confirmation where appropriate rather than relying only on polling.
+- Add explicit latency instrumentation across market event → risk → quote → transaction build → signing → broadcast → confirmation.
+- Add stronger market-data semantics: Solana `logsSubscribe` is an event signal, not a direct executable price feed. Critical exits must use a fresh executable quote before building a sell transaction.
+- Add stronger rug heuristics combining route disappearance, quote-output collapse, price-impact spikes, stale data, and liquidity observations when available. Token authorities should be treated as risk signals, not proof of a rug.
+- Revisit congestion policy so congestion primarily escalates priority fees/RPC failover rather than forcing an emergency sell solely because an RPC is slow.
+- Run controlled test-wallet mainnet validation only after the above checks pass. Never expose or commit private keys.
 
-- Quote path: replace production usage of `StaticQuoteProvider` with a real provider adapter.
-- Transaction path: replace fake builder with real Solana sell transaction construction (respecting min out, slippage, compute budget, priority fee).
-- Transport path: replace `InMemoryTransport` with real RPC send+confirm transport with timeout/failover/duplicate protection.
-- Market data path: replace placeholder WS manager with production market adapters (Solana/Helius) including reconnect/resubscribe/heartbeat/stale handling.
-- Execution state handling: include explicit `UNKNOWN` state when submission occurred but confirmation is uncertain.
+## 3) Safety status
 
-## 4) Existing dependencies that can be reused
+- Live trading is disabled by default.
+- Live mode requires the explicit combination of live mode, `DRY_RUN=false`, and `LIVE_TRADING_ENABLED=true`, plus a valid keypair and RPC configuration.
+- The bot must not claim that it can guarantee an exit before a loss; Solana execution can fail, routes can disappear, liquidity can vanish, and transactions can be delayed or become uncertain.
 
-From `package.json`:
+## 4) Current CI status
 
-- `dotenv` for env-based configuration.
-- `typescript`, `tsx` for build/dev runtime.
-- `vitest` for test suite expansion.
-- `@types/node` for Node typings.
-
-These can be kept while adding Solana-specific runtime dependencies.
+The latest `Solana Exit Bot CI` run for the current main branch completed successfully, including TypeScript/build and the automated test suite.
