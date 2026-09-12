@@ -18,6 +18,9 @@ on:
         required: true
         default: "https://api.mainnet-beta.solana.com"
         type: string
+  push:
+    paths:
+      - ".github/workflows/real-solana-dry-run.yml"
 
 permissions:
   contents: read
@@ -32,9 +35,9 @@ jobs:
       MODE: dry-run
       DRY_RUN: "true"
       LIVE_TRADING_ENABLED: "false"
-      WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key }}
-      POSITION_MINT: ${{ inputs.position_mint }}
-      RPC_ENDPOINTS: ${{ inputs.rpc_url }}
+      WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key || 'BoQjeJzpBTFzNyGStuAvDYsrvbwfGhd3Wspw5PLMnY6s' }}
+      POSITION_MINT: ${{ inputs.position_mint || 'EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump' }}
+      RPC_ENDPOINTS: ${{ inputs.rpc_url || 'https://api.mainnet-beta.solana.com' }}
       POSITION_DECIMALS: "6"
       POSITION_AMOUNT: "1"
       POSITION_ENTRY_PRICE: "1"
