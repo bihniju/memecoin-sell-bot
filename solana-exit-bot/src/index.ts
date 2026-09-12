@@ -19,7 +19,6 @@ import { HeliusWebSocketAdapter, SolanaWebSocketAdapter, WebSocketManager } from
 
 const config = loadConfig();
 const logger = new Logger(config.logLevel);
-
 requireLiveTradingEnabled(config);
 
 const wallet = loadWalletKeypair(config);
@@ -27,7 +26,6 @@ const positions = new PositionManager();
 const priceMonitor = new PriceMonitor();
 const liquidityMonitor = new LiquidityMonitor();
 const riskEngine = new RiskEngine(config.risk);
-
 const rpcManager = new RpcManager(
   config.rpc.rpcEndpoints.length ? config.rpc.rpcEndpoints : ["https://api.mainnet-beta.solana.com"],
   logger
@@ -35,18 +33,22 @@ const rpcManager = new RpcManager(
 
 const quoteProvider: QuoteProvider = config.mode === "paper"
   ? new SimulatedQuoteProvider()
-  : new JupiterQuoteProvider(config.market.quoteApiUrl, config.market.jupiterApiKey);
+  : new JupiterQuoteProvider(config.market.quoteApiUrl, config.market.jupiterApiKey, {
+      timeoutMs: config.execution.quoteRequestTimeoutMs,
+      retries: config.execution.quoteRetries,
+      cacheMs: 100
+    });
 const txBuilder = new JupiterSellTransactionBuilder(
   config.market.swapApiUrl,
   config.mode !== "live",
-  config.market.jupiterApiKey
+  config.market.jupiterApiKey,
+  { timeoutMs: config.execution.quoteRequestTimeoutMs + 300, retries: 1 }
 );
 const transport = new SolanaTransactionTransport(rpcManager, {
   skipPreflight: config.execution.skipPreflight,
   maxRetries: config.execution.maxRpcSendRetries,
   confirmationTimeoutMs: config.execution.confirmationTimeoutMs
 });
-
 const sellExecutor = new SellExecutor(
   config,
   positions,
@@ -58,68 +60,56 @@ const sellExecutor = new SellExecutor(
   logger,
   wallet
 );
-
-const normalizer = new MarketEventNormalizer(
-  quoteProvider,
-  priceMonitor,
-  liquidityMonitor,
-  config.market.sampleDebounceMs
-);
+const normalizer = new MarketEventNormalizer(quoteProvider, priceMonitor, liquidityMonitor, config.market.sampleDebounceMs);
 
 const mint = process.argv.includes("--mint") ? process.argv[process.argv.indexOf("--mint") + 1] : process.env.POSITION_MINT ?? "demo-mint";
 const decimals = Number(process.env.POSITION_DECIMALS ?? 6);
 const amount = Number(process.env.POSITION_AMOUNT ?? 1_000_000);
+const amountRaw = process.env.POSITION_AMOUNT_RAW ? BigInt(process.env.POSITION_AMOUNT_RAW) : undefined;
 const entryPrice = Number(process.env.POSITION_ENTRY_PRICE ?? 1);
 
-positions.upsert(
-  createPosition({
-    mint,
-    decimals,
-    walletAddress: wallet?.publicKey.toBase58() ?? Keypair.generate().publicKey.toBase58(),
-    amount,
-    entryPrice
-  })
-);
+positions.upsert(createPosition({
+  mint,
+  decimals,
+  walletAddress: wallet?.publicKey.toBase58() ?? Keypair.generate().publicKey.toBase58(),
+  amount,
+  amountRaw,
+  entryPrice
+}));
 
 normalizer.register({
   mint,
   outputMint: config.market.outputMint,
-  sampleAmount: BigInt(Math.max(1, Math.floor(amount * 0.01))),
+  sampleAmount: amountRaw ? amountRaw / 100n : BigInt(Math.max(1, Math.floor(amount * 0.01))),
   slippageBps: config.execution.quoteSlippageBps
 });
 
-const wsEndpoint =
-  config.market.websocketProvider === "helius"
-    ? config.rpc.heliusWsUrl ?? config.rpc.websocketEndpoints[0]
-    : config.rpc.websocketEndpoints[0] ?? "wss://api.mainnet-beta.solana.com";
+const configuredWsEndpoints = config.rpc.websocketEndpoints.filter(Boolean);
+const defaultWsEndpoint = config.market.websocketProvider === "helius"
+  ? config.rpc.heliusWsUrl ?? configuredWsEndpoints[0]
+  : configuredWsEndpoints[0] ?? "wss://api.mainnet-beta.solana.com";
+const wsEndpoints = Array.from(new Set([
+  defaultWsEndpoint,
+  ...configuredWsEndpoints,
+  ...(config.rpc.heliusWsUrl ? [config.rpc.heliusWsUrl] : [])
+].filter(Boolean))) as string[];
 
-const wsProvider: WebSocketManager =
-  config.market.websocketProvider === "helius"
-    ? new HeliusWebSocketAdapter(wsEndpoint, config.market.heartbeatMs, config.rpc.staleMarketMs)
-    : new SolanaWebSocketAdapter(wsEndpoint, config.market.heartbeatMs, config.rpc.staleMarketMs);
+const wsProvider: WebSocketManager = config.market.websocketProvider === "helius"
+  ? new HeliusWebSocketAdapter(wsEndpoints, config.market.heartbeatMs, config.rpc.staleMarketMs)
+  : new SolanaWebSocketAdapter(wsEndpoints, config.market.heartbeatMs, config.rpc.staleMarketMs);
 
 priceMonitor.on("tick", (tick) => {
   const p = positions.updatePrice(tick.mint, tick.price);
   if (!p) return;
-
-  const prices = priceMonitor.getTicks(tick.mint, config.risk.fallingWindowMs);
-  const liquidity = liquidityMonitor.getSnapshots(tick.mint, config.risk.fallingWindowMs);
   const decision = riskEngine.evaluate({
     position: p,
-    prices,
-    liquidity,
+    prices: priceMonitor.getTicks(tick.mint, config.risk.fallingWindowMs),
+    liquidity: liquidityMonitor.getSnapshots(tick.mint, config.risk.fallingWindowMs),
     hasValidRoute: true,
     priceImpactBps: tick.priceImpactBps
   });
-
   if (!decision) return;
-
-  logger.warn("risk_triggered", {
-    mint: tick.mint,
-    trigger: decision.trigger,
-    reason: decision.reason,
-    riskScore: decision.riskScore
-  });
+  logger.warn("risk_triggered", { mint: tick.mint, trigger: decision.trigger, reason: decision.reason, riskScore: decision.riskScore });
   sellExecutor.enqueue(decision, tick.mint, tick.timestamp);
 });
 
@@ -136,26 +126,30 @@ normalizer.on("quoteUnavailable", (event) => {
   if (decision) sellExecutor.enqueue(decision, event.mint, event.marketEventAt);
 });
 
-normalizer.on("quoteError", (event) => {
-  logger.warn("market_quote_error", {
-    mint: event.mint,
-    error: event.error
+normalizer.on("quoteError", (event) => logger.warn("market_quote_error", { mint: event.mint, error: event.error }));
+wsProvider.on("marketEvent", (event: { receivedAt: number; mint?: string }) => { void normalizer.handleMarketEvent(event.receivedAt, event.mint); });
+wsProvider.on("stale", (event?: { endpoint?: string; staleMs?: number }) => {
+  const staleMs = event?.staleMs ?? config.rpc.staleMarketMs;
+  logger.warn("market_data_stale", { endpoint: event?.endpoint ?? defaultWsEndpoint, staleMs });
+  if (!config.risk.emergencyOnStaleMarket || staleMs < config.risk.staleMarketMs) return;
+  const p = positions.get(mint);
+  if (!p) return;
+  const decision = riskEngine.evaluate({
+    position: p,
+    prices: priceMonitor.getTicks(mint, config.risk.fallingWindowMs),
+    liquidity: liquidityMonitor.getSnapshots(mint, config.risk.fallingWindowMs),
+    hasValidRoute: false,
+    emergencyFlag: true
   });
+  if (decision) sellExecutor.enqueue(decision, mint, Date.now());
 });
 
-wsProvider.on("marketEvent", (event: { receivedAt: number; mint?: string }) => {
-  void normalizer.handleMarketEvent(event.receivedAt, event.mint);
-});
-
-wsProvider.on("stale", () => {
-  logger.warn("market_data_stale", { endpoint: wsEndpoint, staleMs: config.rpc.staleMarketMs });
-});
+wsProvider.on("error", (error) => logger.warn("market_ws_error", { error: String(error) }));
 
 const shutdown = async () => {
   await wsProvider.disconnect();
   process.exit(0);
 };
-
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
 
@@ -164,7 +158,7 @@ logger.info("Exit bot started", {
   dryRun: config.dryRun,
   mint,
   websocketProvider: config.market.websocketProvider,
-  wsEndpoint,
+  wsEndpoints,
   rpcEndpoint: rpcManager.getActiveEndpoint()
 });
 
@@ -178,11 +172,7 @@ if (config.mode === "paper") {
     }, i * 250);
   }
 } else {
-  void wsProvider
-    .connect()
+  void wsProvider.connect()
     .then(() => wsProvider.subscribe(`mint:${mint}`))
-    .catch((error) => {
-      logger.error("ws_start_failed", { error: String(error) });
-      process.exit(1);
-    });
+    .catch((error) => logger.error("ws_start_failed", { error: String(error) }));
 }
