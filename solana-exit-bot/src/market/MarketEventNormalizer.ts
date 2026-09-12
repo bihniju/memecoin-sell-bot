@@ -38,9 +38,13 @@ export class MarketEventNormalizer extends EventEmitter {
     this.subscriptions.delete(mint);
   }
 
-  async handleMarketEvent(marketEventAt = Date.now()): Promise<void> {
+  async handleMarketEvent(marketEventAt = Date.now(), mint?: string): Promise<void> {
+    const subscriptions = mint
+      ? [this.subscriptions.get(mint)].filter((value): value is NormalizerSubscription => Boolean(value))
+      : [...this.subscriptions.values()];
+
     const tasks: Promise<void>[] = [];
-    for (const sub of this.subscriptions.values()) {
+    for (const sub of subscriptions) {
       if (this.inflight.has(sub.mint)) continue;
       this.inflight.add(sub.mint);
       tasks.push(this.sampleMint(sub, marketEventAt).finally(() => {
@@ -52,12 +56,24 @@ export class MarketEventNormalizer extends EventEmitter {
 
   private async sampleMint(sub: NormalizerSubscription, marketEventAt: number): Promise<void> {
     const quoteRequestedAt = Date.now();
-    const quote = await this.quoteProvider.getQuote({
-      inputMint: sub.mint,
-      outputMint: sub.outputMint,
-      amount: sub.sampleAmount,
-      slippageBps: sub.slippageBps
-    });
+    let quote;
+    try {
+      quote = await this.quoteProvider.getQuote({
+        inputMint: sub.mint,
+        outputMint: sub.outputMint,
+        amount: sub.sampleAmount,
+        slippageBps: sub.slippageBps
+      });
+    } catch (error) {
+      this.emit("quoteError", {
+        mint: sub.mint,
+        marketEventAt,
+        quoteRequestedAt,
+        quoteReceivedAt: Date.now(),
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
     const quoteReceivedAt = Date.now();
 
     if (!quote.routeAvailable || quote.expectedOutAmount <= 0n || quote.inAmount <= 0n) {
@@ -69,13 +85,22 @@ export class MarketEventNormalizer extends EventEmitter {
     this.priceMonitor.ingest({
       mint: sub.mint,
       price,
-      timestamp: quoteReceivedAt
+      timestamp: quoteReceivedAt,
+      priceImpactBps: quote.priceImpactBps
     });
-    this.liquidityMonitor.ingest({
-      mint: sub.mint,
-      liquidityUsd: Number(quote.expectedOutAmount),
-      timestamp: quoteReceivedAt
-    });
+
+    // Jupiter quotes do not expose total pool liquidity. Do not pretend that
+    // the quoted output amount is liquidity; liquidity deterioration is only
+    // recorded when a provider explicitly supplies a liquidityUsd value.
+    const routeInfo = quote.routeInfo as { liquidityUsd?: unknown } | undefined;
+    const liquidityUsd = Number(routeInfo?.liquidityUsd);
+    if (Number.isFinite(liquidityUsd) && liquidityUsd > 0) {
+      this.liquidityMonitor.ingest({
+        mint: sub.mint,
+        liquidityUsd,
+        timestamp: quoteReceivedAt
+      });
+    }
 
     this.emit("latency", {
       mint: sub.mint,
