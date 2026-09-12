@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { Position, Quote, QuoteRequest } from "../types.js";
 
 export interface QuoteProvider {
   getQuote(params: QuoteRequest): Promise<Quote>;
-  quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number): Promise<Quote>;
+  quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number, options?: { fresh?: boolean }): Promise<Quote>;
 }
 
 const parseBigInt = (value: unknown): bigint => {
@@ -42,11 +43,7 @@ export class JupiterQuoteProvider implements QuoteProvider {
         try { res = await fetch(`${this.endpoint}?${key}`, { headers, signal: controller.signal }); } finally { clearTimeout(timeout); }
         if (!res.ok) {
           const detail = await res.text().catch(() => "");
-          // Permanent client errors are deterministic failures. Retrying them
-          // wastes the latency budget and can amplify provider load.
-          if (res.status < 500 && res.status !== 429) {
-            throw new Error(`Jupiter quote failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ""}`);
-          }
+          if (res.status < 500 && res.status !== 429) throw new Error(`Jupiter quote failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ""}`);
           throw new Error(`Jupiter quote transient failure: ${res.status}`);
         }
         const body = (await res.json()) as Record<string, unknown>;
@@ -62,7 +59,8 @@ export class JupiterQuoteProvider implements QuoteProvider {
           priceImpactBps: Number.isFinite(priceImpactPct) ? Math.max(0, Math.round(priceImpactPct * 10_000)) : 0,
           routeAvailable,
           routeInfo: body,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          quoteId: randomUUID()
         };
         this.cache.set(key, { quote, expiresAt: Date.now() + Math.max(0, this.options.cacheMs ?? 100) });
         return quote;
@@ -77,14 +75,25 @@ export class JupiterQuoteProvider implements QuoteProvider {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  async quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number): Promise<Quote> {
+  async quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number, options: { fresh?: boolean } = {}): Promise<Quote> {
     const clamped = Math.max(0, Math.min(100, sellPct));
     const baseRaw = position.amountRaw ?? BigInt(Math.max(0, Math.floor(position.amount)));
     const amountRaw = (baseRaw * BigInt(Math.round((position.remainingPercentage / 100) * (clamped / 100) * 1_000_000))) / 1_000_000n;
     const request = { inputMint: position.mint, outputMint, amount: amountRaw, slippageBps };
+    if (options.fresh) {
+      const primary = await this.fetchFreshQuote(request);
+      if (primary.routeAvailable) return primary;
+      try {
+        const direct = await this.fetchFreshQuote({ ...request, onlyDirectRoutes: true });
+        if (direct.routeAvailable) return direct;
+      } catch {
+        // Preserve the primary no-route result so the risk engine can escalate it.
+      }
+      return primary;
+    }
+
     const primary = await this.getQuote(request);
     if (primary.routeAvailable) return primary;
-
     try {
       const direct = await this.getQuote({ ...request, onlyDirectRoutes: true });
       if (direct.routeAvailable) return direct;
@@ -93,19 +102,26 @@ export class JupiterQuoteProvider implements QuoteProvider {
     }
     return primary;
   }
+
+  private async fetchFreshQuote(params: QuoteRequest): Promise<Quote> {
+    const query = new URLSearchParams({ inputMint: params.inputMint, outputMint: params.outputMint, amount: params.amount.toString(), slippageBps: Math.max(0, Math.min(10_000, Math.trunc(params.slippageBps))).toString() });
+    if (params.onlyDirectRoutes !== undefined) query.set("onlyDirectRoutes", String(params.onlyDirectRoutes));
+    this.cache.delete(query.toString());
+    return this.getQuote(params);
+  }
 }
 
 export class SimulatedQuoteProvider implements QuoteProvider {
   constructor(private readonly slippageBps = 250) {}
   async getQuote(params: QuoteRequest): Promise<Quote> {
     const expectedOut = params.amount;
-    return { provider: "simulated", inAmount: params.amount, expectedOutAmount: expectedOut, minimumOutAmount: minimumAfterSlippage(expectedOut, this.slippageBps), priceImpactBps: this.slippageBps, routeAvailable: expectedOut > 0n, routeInfo: { simulated: true }, timestamp: Date.now() };
+    return { provider: "simulated", inAmount: params.amount, expectedOutAmount: expectedOut, minimumOutAmount: minimumAfterSlippage(expectedOut, this.slippageBps), priceImpactBps: this.slippageBps, routeAvailable: expectedOut > 0n, routeInfo: { simulated: true }, timestamp: Date.now(), quoteId: randomUUID() };
   }
-  async quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number): Promise<Quote> {
+  async quoteForPosition(position: Position, outputMint: string, sellPct: number, slippageBps: number, _options: { fresh?: boolean } = {}): Promise<Quote> {
     const clamped = Math.max(0, Math.min(100, sellPct));
     const baseRaw = position.amountRaw ?? BigInt(Math.max(0, Math.floor(position.amount)));
     const amountRaw = (baseRaw * BigInt(Math.round((position.remainingPercentage / 100) * (clamped / 100) * 1_000_000))) / 1_000_000n;
     const grossOut = Math.floor(Number(amountRaw) * position.currentPrice);
-    return { provider: "simulated", inAmount: amountRaw, expectedOutAmount: BigInt(Math.max(0, grossOut)), minimumOutAmount: minimumAfterSlippage(BigInt(Math.max(0, grossOut)), slippageBps), priceImpactBps: this.slippageBps, routeAvailable: grossOut > 0, routeInfo: { simulated: true, outputMint }, timestamp: Date.now() };
+    return { provider: "simulated", inAmount: amountRaw, expectedOutAmount: BigInt(Math.max(0, grossOut)), minimumOutAmount: minimumAfterSlippage(BigInt(Math.max(0, grossOut)), slippageBps), priceImpactBps: this.slippageBps, routeAvailable: grossOut > 0, routeInfo: { simulated: true, outputMint }, timestamp: Date.now(), quoteId: randomUUID() };
   }
 }

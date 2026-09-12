@@ -3,6 +3,7 @@ import { VersionedTransaction } from "@solana/web3.js";
 export type Mode = "paper" | "dry-run" | "live";
 export type ExitTrigger = "EMERGENCY" | "LIQUIDITY_COLLAPSE" | "NO_VALID_ROUTE" | "RAPID_DECLINE" | "HARD_STOP_LOSS" | "TRAILING_STOP" | "TAKE_PROFIT";
 export type SellState = "IDLE" | "SELLING" | "SOLD" | "PARTIALLY_SOLD" | "FAILED" | "UNKNOWN";
+export type ExecutionStatus = "BUILT" | "SIGNED" | "SUBMITTED" | "PROCESSING" | "CONFIRMED" | "FINALIZED" | "FAILED" | "EXPIRED" | "UNKNOWN" | "RECONCILING" | "REBUILT";
 export interface TakeProfitLevel { id: string; profitPct: number; sellPct: number; }
 export interface Position {
   mint: string; decimals: number; walletAddress: string; amount: number; amountRaw?: bigint; entryPrice: number; entryValue: number;
@@ -14,10 +15,40 @@ export interface LiquiditySnapshot { mint: string; liquidityUsd: number; reserve
 export interface TriggerDecision { trigger: ExitTrigger; reason: string; timestamp: number; price: number; entryPrice: number; pnlPct: number; riskScore: number; sellPct: number; }
 export interface FallingSignal { score: number; shortDropPct: number; consecutiveLowerTicks: number; acceleratingDecline: boolean; volumeImbalance: number; liquidityDeterioration: number; }
 export interface QuoteRequest { inputMint: string; outputMint: string; amount: bigint; slippageBps: number; onlyDirectRoutes?: boolean; }
-export interface Quote { provider: string; inAmount: bigint; expectedOutAmount: bigint; minimumOutAmount: bigint; priceImpactBps: number; routeAvailable: boolean; routeInfo: unknown; timestamp: number; }
-export interface BuiltTransaction { serialized: Uint8Array; transaction?: VersionedTransaction; priorityFeeMicrolamports: number; minOutAmount: bigint; }
-export type ConfirmationStatus = "confirmed" | "failed" | "unknown";
+export interface Quote { provider: string; inAmount: bigint; expectedOutAmount: bigint; minimumOutAmount: bigint; priceImpactBps: number; routeAvailable: boolean; routeInfo: unknown; timestamp: number; quoteId?: string; }
+export interface BuiltTransaction {
+  serialized: Uint8Array;
+  transaction?: VersionedTransaction;
+  priorityFeeMicrolamports: number;
+  minOutAmount: bigint;
+  recentBlockhash?: string;
+  lastValidBlockHeight?: number;
+  blockhashFetchedAt?: number;
+  quoteId?: string;
+}
+export type ConfirmationStatus = "confirmed" | "finalized" | "failed" | "unknown" | "expired";
 export interface SellExecutionResult { submitted: boolean; signature?: string; reason: string; status?: ConfirmationStatus; }
+export interface ExecutionAttempt {
+  executionId: string;
+  positionId: string;
+  trigger: ExitTrigger;
+  quoteId?: string;
+  transactionHash?: string;
+  recentBlockhash?: string;
+  lastValidBlockHeight?: number;
+  builtAt?: number;
+  signedAt?: number;
+  submittedAt?: number;
+  processedAt?: number;
+  confirmedAt?: number;
+  finalizedAt?: number;
+  failedAt?: number;
+  expiryDetectedAt?: number;
+  rebuildCount: number;
+  rpcEndpoint?: string;
+  status: ExecutionStatus;
+  reconciliationResult?: string;
+}
 export interface RiskConfig {
   stopLossEnabled: boolean; stopLossPct: number; earlyExitEnabled: boolean; earlyExitPct: number;
   fallingMarketEnabled: boolean; fallingWindowMs: number; fallingDropPct: number; consecutiveLowerTicks: number;
