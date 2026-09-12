@@ -1,11 +1,5 @@
-export class InMemoryTransport {
-    async submit() {
-        return { signature: `sig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` };
-    }
-    async confirm() {
-        return true;
-    }
-}
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { signBuiltTransaction } from "./TransactionBuilder.js";
 export class SellExecutor {
     config;
     positions;
@@ -15,10 +9,12 @@ export class SellExecutor {
     feeManager;
     transport;
     logger;
+    wallet;
     queue = [];
     running = false;
     activeMints = new Set();
-    constructor(config, positions, quoteProvider, txBuilder, retryManager, feeManager, transport, logger) {
+    lastDecisionByMint = new Map();
+    constructor(config, positions, quoteProvider, txBuilder, retryManager, feeManager, transport, logger, wallet) {
         this.config = config;
         this.positions = positions;
         this.quoteProvider = quoteProvider;
@@ -27,14 +23,22 @@ export class SellExecutor {
         this.feeManager = feeManager;
         this.transport = transport;
         this.logger = logger;
+        this.wallet = wallet;
     }
-    enqueue(decision, mint) {
+    enqueue(decision, mint, marketEventAt = Date.now()) {
         const position = this.positions.get(mint);
         if (!position)
             return;
         if (position.sellState === "SELLING" || position.sellState === "SOLD")
             return;
-        this.queue.push({ mint, decision });
+        const previous = this.lastDecisionByMint.get(mint);
+        if (previous &&
+            previous.trigger === decision.trigger &&
+            Date.now() - previous.at < this.config.risk.decisionCooldownMs) {
+            return;
+        }
+        this.lastDecisionByMint.set(mint, { trigger: decision.trigger, at: Date.now() });
+        this.queue.push({ mint, decision, marketEventAt });
         this.kick();
     }
     kick() {
@@ -52,7 +56,7 @@ export class SellExecutor {
                 continue;
             this.activeMints.add(item.mint);
             try {
-                await this.processItem(item.mint, item.decision);
+                await this.processItem(item.mint, item.decision, item.marketEventAt);
             }
             finally {
                 this.activeMints.delete(item.mint);
@@ -60,7 +64,7 @@ export class SellExecutor {
         }
         this.running = false;
     }
-    async processItem(mint, decision) {
+    async processItem(mint, decision, marketEventAt) {
         const position = this.positions.get(mint);
         if (!position)
             return;
@@ -68,75 +72,134 @@ export class SellExecutor {
             return;
         this.positions.setSellState(mint, "SELLING");
         position.lastTrigger = decision.trigger;
-        const signalDetectedAt = Date.now();
         for (const attempt of this.retryManager.attempts()) {
             const current = this.positions.get(mint);
             if (!current || current.remainingPercentage <= 0)
                 return;
+            const riskDecisionAt = Date.now();
+            const quoteRequestedAt = Date.now();
+            const quote = await this.quoteProvider.quoteForPosition(current, this.config.market.outputMint, decision.sellPct, this.config.execution.quoteSlippageBps);
             const quoteReceivedAt = Date.now();
-            const quote = await this.quoteProvider.getQuote(current, decision.sellPct);
-            if (!quote.routeAvailable) {
-                this.logger.warn("No route available", { mint, trigger: decision.trigger });
+            const quoteValidation = this.validateQuote(current, quote);
+            if (!quoteValidation.ok) {
+                this.logger.warn("Quote rejected", { mint, reason: quoteValidation.reason, trigger: decision.trigger });
                 continue;
             }
-            if (quote.priceImpactBps > this.config.risk.maxPriceImpactBps) {
-                this.logger.warn("Price impact too high", { mint, impact: quote.priceImpactBps });
-                continue;
-            }
-            const priorityFeeMicrolamports = this.feeManager.resolveFee(decision, attempt);
+            const emergencyFee = decision.trigger === "EMERGENCY" || decision.riskScore >= this.config.risk.riskScoreEmergency;
+            const priorityFeeMicrolamports = await this.feeManager.resolveFee(decision, attempt, emergencyFee);
             const transactionBuiltAt = Date.now();
-            const tx = this.txBuilder.build(current, quote, priorityFeeMicrolamports);
-            if (this.config.dryRun || this.config.mode !== "live") {
-                this.logDryRun(decision, current, quote, { signalDetectedAt, quoteReceivedAt, transactionBuiltAt });
-                this.positions.applyFill(mint, decision.sellPct, quote.outAmount, "dry-run");
+            const walletPubkey = this.resolveWalletPublicKey(current);
+            const tx = await this.txBuilder.buildSellTransaction({
+                wallet: walletPubkey,
+                position: current,
+                quote,
+                priorityFeeMicrolamports
+            });
+            const timestamps = {
+                marketEventAt,
+                riskDecisionAt,
+                quoteRequestedAt,
+                quoteReceivedAt,
+                transactionBuiltAt: Date.now()
+            };
+            if (this.config.mode === "paper") {
+                await new Promise((resolve) => setTimeout(resolve, this.config.execution.simulationLatencyMs));
+                this.positions.applyFill(mint, decision.sellPct, Number(quote.expectedOutAmount), "paper-simulated");
+                this.logExit(current, decision, quote, priorityFeeMicrolamports, "paper-simulated", "confirmed", timestamps);
                 return;
             }
-            const result = await this.submitAndTrack(tx, current, quote, decision, signalDetectedAt, quoteReceivedAt, transactionBuiltAt);
-            if (result.submitted)
+            if (this.config.mode === "dry-run" || this.config.dryRun) {
+                this.positions.setSellState(mint, "IDLE");
+                this.logExit(current, decision, quote, priorityFeeMicrolamports, "dry-run", "unknown", timestamps);
+                return;
+            }
+            if (!this.wallet) {
+                throw new Error("Live mode requires loaded wallet");
+            }
+            timestamps.transactionSignedAt = Date.now();
+            const signed = signBuiltTransaction(tx, this.wallet);
+            const result = await this.submitAndTrack(signed, current, quote, decision, priorityFeeMicrolamports, timestamps);
+            if (result.status === "confirmed" || result.status === "unknown")
                 return;
         }
         this.positions.setSellState(mint, "FAILED");
     }
-    async submitAndTrack(tx, position, quote, decision, signalDetectedAt, quoteReceivedAt, transactionBuiltAt) {
-        const transactionSubmittedAt = Date.now();
-        const { signature } = await this.transport.submit(tx);
-        this.logger.info("Submitted sell transaction", {
-            mint: position.mint,
-            signature,
-            trigger: decision.trigger,
-            signalToQuoteMs: quoteReceivedAt - signalDetectedAt,
-            quoteToBuildMs: transactionBuiltAt - quoteReceivedAt,
-            buildToSubmitMs: transactionSubmittedAt - transactionBuiltAt
-        });
-        void (async () => {
-            const confirmationAt = Date.now();
-            const confirmed = await this.transport.confirm(signature);
-            if (confirmed) {
-                this.positions.applyFill(position.mint, decision.sellPct, quote.outAmount, signature);
-                this.logger.info("Sell transaction confirmed", {
-                    mint: position.mint,
-                    signature,
-                    submitToConfirmMs: confirmationAt - transactionSubmittedAt
-                });
-            }
-            else {
-                this.positions.setSellState(position.mint, "FAILED");
-            }
-        })();
-        return { submitted: true, signature, reason: "submitted" };
+    async submitAndTrack(tx, position, quote, decision, priorityFeeMicrolamports, timestamps) {
+        timestamps.transactionSubmittedAt = Date.now();
+        const { signature, endpoint, duplicate } = await this.transport.send(tx);
+        const status = await this.transport.confirm(signature);
+        timestamps.confirmationAt = Date.now();
+        if (status === "confirmed") {
+            this.positions.applyFill(position.mint, decision.sellPct, Number(quote.expectedOutAmount), signature);
+        }
+        else if (status === "unknown") {
+            this.positions.setSellState(position.mint, "UNKNOWN");
+        }
+        else {
+            this.positions.setSellState(position.mint, "FAILED");
+        }
+        this.logExit(position, decision, quote, priorityFeeMicrolamports, signature, status, timestamps, endpoint, duplicate);
+        return { submitted: true, signature, reason: status, status };
     }
-    logDryRun(decision, position, quote, latency) {
-        this.logger.info("[DRY RUN] Would SELL", {
+    validateQuote(position, quote) {
+        const remainingAmount = position.amount * (position.remainingPercentage / 100);
+        if (remainingAmount <= 0)
+            return { ok: false, reason: "insufficient token balance" };
+        if (quote.inAmount <= 0n)
+            return { ok: false, reason: "invalid token amount" };
+        if (!quote.routeAvailable)
+            return { ok: false, reason: "no route" };
+        if (quote.expectedOutAmount <= 0n || quote.minimumOutAmount <= 0n)
+            return { ok: false, reason: "zero output" };
+        if (quote.priceImpactBps > this.config.risk.maxPriceImpactBps)
+            return { ok: false, reason: "excessive price impact" };
+        if (Date.now() - quote.timestamp > this.config.execution.quoteStaleMs)
+            return { ok: false, reason: "stale quote" };
+        return { ok: true };
+    }
+    resolveWalletPublicKey(position) {
+        if (this.wallet)
+            return this.wallet.publicKey;
+        try {
+            return new PublicKey(position.walletAddress);
+        }
+        catch {
+            return Keypair.generate().publicKey;
+        }
+    }
+    logExit(position, decision, quote, priorityFee, signature, status, timestamps, rpcEndpoint, duplicateSend) {
+        const signalLatencyMs = timestamps.riskDecisionAt - timestamps.marketEventAt;
+        const quoteLatencyMs = timestamps.quoteReceivedAt - timestamps.quoteRequestedAt;
+        const buildLatencyMs = timestamps.transactionBuiltAt - timestamps.quoteReceivedAt;
+        const submissionLatencyMs = timestamps.transactionSubmittedAt
+            ? timestamps.transactionSubmittedAt - timestamps.transactionBuiltAt
+            : undefined;
+        const confirmationLatencyMs = timestamps.confirmationAt && timestamps.transactionSubmittedAt
+            ? timestamps.confirmationAt - timestamps.transactionSubmittedAt
+            : undefined;
+        const totalExitLatencyMs = timestamps.confirmationAt ? timestamps.confirmationAt - timestamps.marketEventAt : undefined;
+        this.logger.info("exit_execution", {
+            positionId: position.mint,
             mint: position.mint,
-            sellPct: decision.sellPct,
-            reason: decision.trigger,
-            entry: position.entryPrice,
-            current: position.currentPrice,
-            pnlPct: decision.pnlPct,
+            trigger: decision.trigger,
             riskScore: decision.riskScore,
-            expectedOut: quote.outAmount,
-            signalToQuoteMs: latency.quoteReceivedAt - latency.signalDetectedAt,
-            quoteToBuildMs: latency.transactionBuiltAt - latency.quoteReceivedAt
+            sellPercentage: decision.sellPct,
+            expectedOutput: quote.expectedOutAmount.toString(),
+            priceImpactBps: quote.priceImpactBps,
+            priorityFee,
+            rpcEndpoint,
+            transactionSignature: signature,
+            duplicateSend,
+            timestamps,
+            latencies: {
+                signalLatencyMs,
+                quoteLatencyMs,
+                buildLatencyMs,
+                submissionLatencyMs,
+                confirmationLatencyMs,
+                totalExitLatencyMs
+            },
+            finalState: status
         });
     }
 }

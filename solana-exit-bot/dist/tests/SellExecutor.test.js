@@ -1,54 +1,189 @@
+import { Keypair, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { describe, expect, test } from "vitest";
-import { loadConfig } from "../src/config.js";
-import { SellExecutor } from "../src/execution/SellExecutor.js";
 import { PriorityFeeManager } from "../src/execution/PriorityFeeManager.js";
-import { StaticQuoteProvider } from "../src/execution/QuoteProvider.js";
 import { RetryManager } from "../src/execution/RetryManager.js";
-import { TransactionBuilder } from "../src/execution/TransactionBuilder.js";
+import { SellExecutor } from "../src/execution/SellExecutor.js";
 import { Logger } from "../src/logging/Logger.js";
 import { PositionManager } from "../src/position/PositionManager.js";
 import { createPosition } from "../src/position/PositionState.js";
+const baseConfig = () => ({
+    mode: "live",
+    dryRun: false,
+    logLevel: "error",
+    risk: {
+        stopLossEnabled: true,
+        stopLossPct: 5,
+        earlyExitEnabled: true,
+        earlyExitPct: 2,
+        fallingMarketEnabled: true,
+        fallingWindowMs: 3000,
+        fallingDropPct: 1.5,
+        consecutiveLowerTicks: 3,
+        riskScoreWarning: 40,
+        riskScoreHigh: 60,
+        riskScoreEmergency: 80,
+        fallingWeightPriceDrop: 40,
+        fallingWeightLowerTicks: 20,
+        fallingWeightAcceleration: 20,
+        fallingWeightVolumeImbalance: 10,
+        fallingWeightLiquidity: 10,
+        trailingStopEnabled: true,
+        trailingActivationPct: 20,
+        trailingStopPct: 8,
+        takeProfitEnabled: true,
+        takeProfitLevels: [],
+        maxPriceImpactBps: 1500,
+        decisionCooldownMs: 500
+    },
+    execution: {
+        maxSellRetries: 3,
+        priorityFeeEnabled: true,
+        priorityFeeMode: "dynamic",
+        minPriorityFeeMicrolamports: 1000,
+        maxPriorityFeeMicrolamports: 50000,
+        emergencyPriorityFeeMicrolamports: 100000,
+        quoteSlippageBps: 250,
+        quoteStaleMs: 1000,
+        skipPreflight: false,
+        maxRpcSendRetries: 2,
+        confirmationTimeoutMs: 500,
+        simulationLatencyMs: 5
+    },
+    rpc: {
+        network: "mainnet-beta",
+        rpcEndpoints: ["http://localhost:8899"],
+        websocketEndpoints: ["ws://localhost:8900"],
+        staleMarketMs: 1500
+    },
+    wallet: {
+        liveTradingEnabled: true,
+        walletKeypairPath: undefined
+    },
+    market: {
+        outputMint: "So11111111111111111111111111111111111111112",
+        quoteApiUrl: "https://example.com/quote",
+        swapApiUrl: "https://example.com/swap",
+        websocketProvider: "solana",
+        sampleDebounceMs: 100,
+        heartbeatMs: 1000
+    }
+});
+const decision = {
+    trigger: "RAPID_DECLINE",
+    reason: "risk",
+    timestamp: Date.now(),
+    price: 0.9,
+    entryPrice: 1,
+    pnlPct: -10,
+    riskScore: 90,
+    sellPct: 100
+};
+class TestQuoteProvider {
+    quote;
+    constructor(quote) {
+        this.quote = quote;
+    }
+    async getQuote() {
+        return this.quote;
+    }
+    async quoteForPosition() {
+        return this.quote;
+    }
+}
+class TestBuilder {
+    builds = 0;
+    async buildSellTransaction(params) {
+        this.builds += 1;
+        const message = new TransactionMessage({
+            payerKey: params.wallet,
+            recentBlockhash: "11111111111111111111111111111111",
+            instructions: []
+        }).compileToV0Message([]);
+        const transaction = new VersionedTransaction(message);
+        return {
+            serialized: transaction.serialize(),
+            transaction,
+            priorityFeeMicrolamports: 1000,
+            minOutAmount: 1n
+        };
+    }
+}
 class TestTransport {
-    submits = 0;
-    async submit() {
-        this.submits += 1;
-        return { signature: `sig-${this.submits}` };
+    status;
+    sends = 0;
+    constructor(status) {
+        this.status = status;
+    }
+    async send() {
+        this.sends += 1;
+        return { signature: `sig-${this.sends}`, endpoint: "rpc-a", duplicate: false };
     }
     async confirm() {
-        return true;
+        return this.status;
     }
 }
 describe("SellExecutor", () => {
-    test("prevents duplicate sell for same position while active", async () => {
-        process.env.MODE = "dry-run";
-        process.env.DRY_RUN = "true";
-        const config = loadConfig();
+    test("duplicate sell prevention keeps one active operation", async () => {
+        const config = baseConfig();
         const pm = new PositionManager();
-        pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 100, entryPrice: 1 }));
-        const transport = new TestTransport();
-        const executor = new SellExecutor(config, pm, new StaticQuoteProvider(), new TransactionBuilder(), new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"));
-        const decision = {
-            trigger: "RAPID_DECLINE",
-            reason: "risk",
-            timestamp: Date.now(),
-            price: 0.9,
-            entryPrice: 1,
-            pnlPct: -10,
-            riskScore: 90,
-            sellPct: 100
+        pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+        const quote = {
+            provider: "test",
+            inAmount: 100n,
+            expectedOutAmount: 90n,
+            minimumOutAmount: 80n,
+            priceImpactBps: 300,
+            routeAvailable: true,
+            routeInfo: {},
+            timestamp: Date.now()
         };
+        const transport = new TestTransport("confirmed");
+        const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), new TestBuilder(), new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"), Keypair.generate());
         executor.enqueue(decision, "m");
         executor.enqueue(decision, "m");
-        await new Promise((r) => setTimeout(r, 30));
-        const p = pm.get("m");
-        expect(p?.sellState).toBe("SOLD");
-        expect(transport.submits).toBe(0);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(transport.sends).toBe(1);
+        expect(pm.get("m")?.sellState).toBe("SOLD");
     });
-    test("take profit level is consumed only once", () => {
-        const p = createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 100, entryPrice: 1 });
-        p.currentPrice = 1.5;
-        p.completedTakeProfitLevels.add("tp1");
-        expect(p.completedTakeProfitLevels.has("tp1")).toBe(true);
-        expect(p.completedTakeProfitLevels.size).toBe(1);
+    test("stale quote is rejected", async () => {
+        const config = baseConfig();
+        config.execution.quoteStaleMs = 1;
+        const pm = new PositionManager();
+        pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+        const quote = {
+            provider: "test",
+            inAmount: 100n,
+            expectedOutAmount: 90n,
+            minimumOutAmount: 80n,
+            priceImpactBps: 300,
+            routeAvailable: true,
+            routeInfo: {},
+            timestamp: Date.now() - 10_000
+        };
+        const transport = new TestTransport("confirmed");
+        const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), new TestBuilder(), new RetryManager(config.execution), new PriorityFeeManager(config.execution), transport, new Logger("error"), Keypair.generate());
+        executor.enqueue(decision, "m");
+        await new Promise((r) => setTimeout(r, 50));
+        expect(transport.sends).toBe(0);
+        expect(pm.get("m")?.sellState).toBe("FAILED");
+    });
+    test("unknown confirmation status sets UNKNOWN", async () => {
+        const config = baseConfig();
+        const pm = new PositionManager();
+        pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+        const quote = {
+            provider: "test",
+            inAmount: 100n,
+            expectedOutAmount: 90n,
+            minimumOutAmount: 80n,
+            priceImpactBps: 300,
+            routeAvailable: true,
+            routeInfo: {},
+            timestamp: Date.now()
+        };
+        const executor = new SellExecutor(config, pm, new TestQuoteProvider(quote), new TestBuilder(), new RetryManager(config.execution), new PriorityFeeManager(config.execution), new TestTransport("unknown"), new Logger("error"), Keypair.generate());
+        executor.enqueue(decision, "m");
+        await new Promise((r) => setTimeout(r, 50));
+        expect(pm.get("m")?.sellState).toBe("UNKNOWN");
     });
 });

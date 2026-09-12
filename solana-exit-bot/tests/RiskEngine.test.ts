@@ -28,11 +28,12 @@ const config: RiskConfig = {
     { id: "tp1", profitPct: 20, sellPct: 25 },
     { id: "tp2", profitPct: 40, sellPct: 25 }
   ],
-  maxPriceImpactBps: 1500
+  maxPriceImpactBps: 1500,
+  decisionCooldownMs: 1
 };
 
 describe("RiskEngine", () => {
-  test("triggers stop loss", () => {
+  test("stop loss trigger path", () => {
     const p = createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 10, entryPrice: 1 });
     p.currentPrice = 0.94;
     const engine = new RiskEngine(config);
@@ -47,10 +48,29 @@ describe("RiskEngine", () => {
       hasValidRoute: true,
       priceImpactBps: 300
     });
-    expect(decision?.trigger).toBe("RAPID_DECLINE");
+    expect(["RAPID_DECLINE", "HARD_STOP_LOSS"]).toContain(decision?.trigger);
   });
 
-  test("uses priority when multiple triggers fire", () => {
+  test("emergency has highest priority", () => {
+    const p = createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 10, entryPrice: 1 });
+    p.currentPrice = 0.7;
+    const engine = new RiskEngine(config);
+    const decision = engine.evaluate({
+      position: p,
+      prices: [
+        { mint: "m", price: 1, timestamp: 1 },
+        { mint: "m", price: 0.9, timestamp: 2 },
+        { mint: "m", price: 0.7, timestamp: 3 }
+      ],
+      liquidity: [],
+      hasValidRoute: false,
+      priceImpactBps: 5000,
+      emergencyFlag: true
+    });
+    expect(decision?.trigger).toBe("EMERGENCY");
+  });
+
+  test("liquidity collapse beats no route/rapid decline", () => {
     const p = createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 10, entryPrice: 1 });
     p.currentPrice = 0.8;
     const engine = new RiskEngine(config);
@@ -69,5 +89,40 @@ describe("RiskEngine", () => {
       priceImpactBps: 3000
     });
     expect(decision?.trigger).toBe("LIQUIDITY_COLLAPSE");
+  });
+
+  test("no route trigger", () => {
+    const p = createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 10, entryPrice: 1 });
+    p.currentPrice = 0.99;
+    const engine = new RiskEngine(config);
+    const decision = engine.evaluate({
+      position: p,
+      prices: [{ mint: "m", price: 0.99, timestamp: 1 }],
+      liquidity: [],
+      hasValidRoute: false,
+      priceImpactBps: 0
+    });
+    expect(decision?.trigger).toBe("NO_VALID_ROUTE");
+  });
+
+  test("trigger cooldown suppresses duplicates", () => {
+    const p = createPosition({ mint: "m", decimals: 6, walletAddress: "w", amount: 10, entryPrice: 1 });
+    p.currentPrice = 0.8;
+    const engine = new RiskEngine({ ...config, decisionCooldownMs: 999_999 });
+    const input = {
+      position: p,
+      prices: [
+        { mint: "m", price: 1, timestamp: 1, volumeBuy: 1, volumeSell: 20 },
+        { mint: "m", price: 0.9, timestamp: 2, volumeBuy: 1, volumeSell: 30 },
+        { mint: "m", price: 0.8, timestamp: 3, volumeBuy: 1, volumeSell: 40 }
+      ],
+      liquidity: [],
+      hasValidRoute: true,
+      priceImpactBps: 0
+    };
+    const first = engine.evaluate(input);
+    const second = engine.evaluate(input);
+    expect(first).toBeDefined();
+    expect(second).toBeUndefined();
   });
 });

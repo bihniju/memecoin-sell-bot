@@ -26,6 +26,7 @@ export interface RiskInput {
 
 export class RiskEngine {
   private readonly fallingDetector: FallingMarketDetector;
+  private readonly recentTriggers = new Map<string, number>();
 
   constructor(private readonly config: RiskConfig) {
     this.fallingDetector = new FallingMarketDetector(config);
@@ -33,7 +34,6 @@ export class RiskEngine {
 
   evaluate(input: RiskInput): TriggerDecision | undefined {
     const { position, prices, liquidity, hasValidRoute, priceImpactBps, emergencyFlag } = input;
-    const pnlPct = pctChange(position.entryPrice, position.currentPrice);
     const fallingSignal = this.fallingDetector.evaluate(prices, liquidity);
     const decisions: TriggerDecision[] = [];
 
@@ -81,7 +81,16 @@ export class RiskEngine {
 
     if (decisions.length === 0) return;
     decisions.sort((a, b) => priority.indexOf(a.trigger) - priority.indexOf(b.trigger));
-    return decisions[0];
+
+    const selected = decisions[0];
+    const key = `${position.mint}:${selected.trigger}`;
+    const previous = this.recentTriggers.get(key);
+    if (previous && Date.now() - previous < this.config.decisionCooldownMs) {
+      return;
+    }
+    this.recentTriggers.set(key, Date.now());
+
+    return selected;
   }
 
   private make(position: Position, trigger: TriggerDecision["trigger"], reason: string, riskScore: number, sellPct: number): TriggerDecision {

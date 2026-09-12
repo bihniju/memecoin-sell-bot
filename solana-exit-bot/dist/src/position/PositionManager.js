@@ -41,6 +41,15 @@ export class PositionManager {
         p.lastSellAttempt = Date.now();
         return p;
     }
+    tryTransition(mint, from, to) {
+        const p = this.positions.get(mint);
+        if (!p)
+            return false;
+        if (!from.includes(p.sellState))
+            return false;
+        p.sellState = to;
+        return true;
+    }
     setSellState(mint, state) {
         const p = this.positions.get(mint);
         if (!p)
