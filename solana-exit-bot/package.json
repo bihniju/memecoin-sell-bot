@@ -10,6 +10,7 @@
     "test": "vitest run tests",
     "test:watch": "vitest tests",
     "benchmark": "tsx src/benchmark.ts",
+    "rpc-load": "tsx src/rpcLoadBenchmark.ts",
     "paper": "MODE=paper tsx src/index.ts",
     "dry-run": "MODE=dry-run DRY_RUN=true tsx src/index.ts",
     "dry-run:real": "MODE=dry-run DRY_RUN=true tsx src/dryRun.ts",
