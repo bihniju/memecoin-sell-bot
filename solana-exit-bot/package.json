@@ -12,6 +12,7 @@
     "benchmark": "tsx src/benchmark.ts",
     "paper": "MODE=paper tsx src/index.ts",
     "dry-run": "MODE=dry-run DRY_RUN=true tsx src/index.ts",
+    "dry-run:real": "MODE=dry-run DRY_RUN=true tsx src/dryRun.ts",
     "live": "MODE=live DRY_RUN=false tsx src/index.ts"
   },
   "dependencies": {
@@ -22,7 +23,6 @@
   "devDependencies": {
     "@types/node": "^22.8.7",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.19.1",
     "typescript": "^5.6.3",
     "vitest": "^5.0.0"
   }
