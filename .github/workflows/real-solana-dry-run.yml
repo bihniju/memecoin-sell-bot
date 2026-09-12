@@ -11,7 +11,7 @@ on:
       position_mint:
         description: "Test token mint"
         required: true
-        default: "EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump"
+        default: "H9gp9xGBEeKcpUNqci1y9nLBALEW6gMHRDoGuyg6pump"
         type: string
       rpc_url:
         description: "Solana RPC endpoint"
@@ -36,7 +36,7 @@ jobs:
       DRY_RUN: "true"
       LIVE_TRADING_ENABLED: "false"
       WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key || 'BoQjeJzpBTFzNyGStuAvDYsrvbwfGhd3Wspw5PLMnY6s' }}
-      POSITION_MINT: ${{ inputs.position_mint || 'EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump' }}
+      POSITION_MINT: ${{ inputs.position_mint || 'H9gp9xGBEeKcpUNqci1y9nLBALEW6gMHRDoGuyg6pump' }}
       RPC_ENDPOINTS: ${{ inputs.rpc_url || 'https://api.mainnet-beta.solana.com' }}
       POSITION_DECIMALS: "6"
       POSITION_AMOUNT: "1"
@@ -84,5 +84,3 @@ jobs:
           test "$DRY_RUN" = "true"
           test "$LIVE_TRADING_ENABLED" = "false"
           echo "Safety gate passed: dry-run only; no transaction broadcast is permitted."
-
-      # Force a fresh workflow revision so the corrected target is executed.
