@@ -47,6 +47,14 @@ export class PositionManager {
     return p;
   }
 
+  tryTransition(mint: string, from: SellState[], to: SellState): boolean {
+    const p = this.positions.get(mint);
+    if (!p) return false;
+    if (!from.includes(p.sellState)) return false;
+    p.sellState = to;
+    return true;
+  }
+
   setSellState(mint: string, state: SellState): void {
     const p = this.positions.get(mint);
     if (!p) return;

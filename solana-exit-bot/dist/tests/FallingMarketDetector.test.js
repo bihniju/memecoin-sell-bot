@@ -22,7 +22,8 @@ const config = {
     trailingStopPct: 8,
     takeProfitEnabled: true,
     takeProfitLevels: [],
-    maxPriceImpactBps: 1500
+    maxPriceImpactBps: 1500,
+    decisionCooldownMs: 500
 };
 describe("FallingMarketDetector", () => {
     test("detects consecutive lower ticks and high score", () => {
@@ -38,5 +39,10 @@ describe("FallingMarketDetector", () => {
         ]);
         expect(signal.consecutiveLowerTicks).toBeGreaterThanOrEqual(3);
         expect(signal.score).toBeGreaterThanOrEqual(60);
+    });
+    test("handles stale/insufficient market series", () => {
+        const detector = new FallingMarketDetector(config);
+        const signal = detector.evaluate([{ mint: "m", price: 1, timestamp: 1 }], []);
+        expect(signal.score).toBe(0);
     });
 });

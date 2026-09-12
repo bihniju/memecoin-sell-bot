@@ -1,3 +1,5 @@
+import { VersionedTransaction } from "@solana/web3.js";
+
 export type Mode = "paper" | "dry-run" | "live";
 
 export type ExitTrigger =
@@ -9,7 +11,7 @@ export type ExitTrigger =
   | "TRAILING_STOP"
   | "TAKE_PROFIT";
 
-export type SellState = "IDLE" | "SELLING" | "SOLD" | "PARTIALLY_SOLD" | "FAILED";
+export type SellState = "IDLE" | "SELLING" | "SOLD" | "PARTIALLY_SOLD" | "FAILED" | "UNKNOWN";
 
 export interface TakeProfitLevel {
   id: string;
@@ -74,23 +76,39 @@ export interface FallingSignal {
   liquidityDeterioration: number;
 }
 
+export interface QuoteRequest {
+  inputMint: string;
+  outputMint: string;
+  amount: bigint;
+  slippageBps: number;
+  onlyDirectRoutes?: boolean;
+}
+
 export interface Quote {
-  inAmount: number;
-  outAmount: number;
+  provider: string;
+  inAmount: bigint;
+  expectedOutAmount: bigint;
+  minimumOutAmount: bigint;
   priceImpactBps: number;
   routeAvailable: boolean;
+  routeInfo: unknown;
   timestamp: number;
 }
 
 export interface BuiltTransaction {
-  serialized: string;
+  serialized: Uint8Array;
+  transaction?: VersionedTransaction;
   priorityFeeMicrolamports: number;
+  minOutAmount: bigint;
 }
+
+export type ConfirmationStatus = "confirmed" | "failed" | "unknown";
 
 export interface SellExecutionResult {
   submitted: boolean;
   signature?: string;
   reason: string;
+  status?: ConfirmationStatus;
 }
 
 export interface RiskConfig {
@@ -116,15 +134,22 @@ export interface RiskConfig {
   takeProfitEnabled: boolean;
   takeProfitLevels: TakeProfitLevel[];
   maxPriceImpactBps: number;
+  decisionCooldownMs: number;
 }
 
 export interface ExecutionConfig {
   maxSellRetries: number;
   priorityFeeEnabled: boolean;
-  priorityFeeMode: "dynamic" | "fixed";
+  priorityFeeMode: "dynamic" | "fixed" | "emergency";
   minPriorityFeeMicrolamports: number;
   maxPriorityFeeMicrolamports: number;
   emergencyPriorityFeeMicrolamports: number;
+  quoteSlippageBps: number;
+  quoteStaleMs: number;
+  skipPreflight: boolean;
+  maxRpcSendRetries: number;
+  confirmationTimeoutMs: number;
+  simulationLatencyMs: number;
 }
 
 export interface RpcConfig {
@@ -132,14 +157,43 @@ export interface RpcConfig {
   rpcEndpoints: string[];
   websocketEndpoints: string[];
   staleMarketMs: number;
+  heliusApiKey?: string;
+  heliusRpcUrl?: string;
+  heliusWsUrl?: string;
+}
+
+export interface WalletConfig {
+  walletKeypairPath?: string;
+  liveTradingEnabled: boolean;
+}
+
+export interface MarketConfig {
+  outputMint: string;
+  quoteApiUrl: string;
+  swapApiUrl: string;
+  websocketProvider: "solana" | "helius";
+  sampleDebounceMs: number;
+  heartbeatMs: number;
 }
 
 export interface BotConfig {
   mode: Mode;
   dryRun: boolean;
   logLevel: "debug" | "info" | "warn" | "error";
-  walletKeypairPath?: string;
   risk: RiskConfig;
   execution: ExecutionConfig;
   rpc: RpcConfig;
+  wallet: WalletConfig;
+  market: MarketConfig;
+}
+
+export interface ExitLatencyTimestamps {
+  marketEventAt: number;
+  riskDecisionAt: number;
+  quoteRequestedAt: number;
+  quoteReceivedAt: number;
+  transactionBuiltAt: number;
+  transactionSignedAt?: number;
+  transactionSubmittedAt?: number;
+  confirmationAt?: number;
 }

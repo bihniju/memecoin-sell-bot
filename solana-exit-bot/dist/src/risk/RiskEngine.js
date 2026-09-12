@@ -15,13 +15,13 @@ const priority = [
 export class RiskEngine {
     config;
     fallingDetector;
+    recentTriggers = new Map();
     constructor(config) {
         this.config = config;
         this.fallingDetector = new FallingMarketDetector(config);
     }
     evaluate(input) {
         const { position, prices, liquidity, hasValidRoute, priceImpactBps, emergencyFlag } = input;
-        const pnlPct = pctChange(position.entryPrice, position.currentPrice);
         const fallingSignal = this.fallingDetector.evaluate(prices, liquidity);
         const decisions = [];
         if (emergencyFlag) {
@@ -57,7 +57,14 @@ export class RiskEngine {
         if (decisions.length === 0)
             return;
         decisions.sort((a, b) => priority.indexOf(a.trigger) - priority.indexOf(b.trigger));
-        return decisions[0];
+        const selected = decisions[0];
+        const key = `${position.mint}:${selected.trigger}`;
+        const previous = this.recentTriggers.get(key);
+        if (previous && Date.now() - previous < this.config.decisionCooldownMs) {
+            return;
+        }
+        this.recentTriggers.set(key, Date.now());
+        return selected;
     }
     make(position, trigger, reason, riskScore, sellPct) {
         return {
