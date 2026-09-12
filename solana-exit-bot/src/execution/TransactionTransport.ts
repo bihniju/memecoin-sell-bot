@@ -1,6 +1,17 @@
-import { Connection, SendOptions } from "@solana/web3.js";
+import { Connection, SendOptions, VersionedTransaction } from "@solana/web3.js";
 import { BuiltTransaction, ConfirmationStatus } from "../types.js";
 import { RpcManager } from "../rpc/RpcManager.js";
+
+export class TransactionSubmissionUncertainError extends Error {
+  constructor(
+    public readonly signature: string,
+    public readonly endpoint: string,
+    cause?: unknown
+  ) {
+    super(`Transaction submission uncertain for ${signature} via ${endpoint}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "TransactionSubmissionUncertainError";
+  }
+}
 
 export interface TransactionTransport {
   send(transaction: BuiltTransaction): Promise<{ signature: string; endpoint: string; duplicate: boolean }>;
@@ -45,6 +56,25 @@ export class SolanaTransactionTransport implements TransactionTransport {
       } catch (error) {
         lastError = error;
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, false);
+
+        // A network/timeout failure can happen after the RPC accepted the
+        // transaction. Never send the same signed transaction to another RPC
+        // until we have reconciled the original signature.
+        if (this.isSubmissionUncertainError(error)) {
+          const signature = this.deriveSignature(transaction);
+          if (signature) {
+            const reconciliation = await this.confirm(signature, transaction);
+            if (reconciliation === "confirmed") {
+              this.sentByHash.set(txHash, signature);
+              return { signature, endpoint, duplicate: false };
+            }
+            if (reconciliation === "failed" || reconciliation === "expired") {
+              throw new Error(`Transaction submission failed after reconciliation: ${reconciliation}`);
+            }
+            throw new TransactionSubmissionUncertainError(signature, endpoint, error);
+          }
+          throw new TransactionSubmissionUncertainError("unknown", endpoint, error);
+        }
       }
     }
 
@@ -70,8 +100,6 @@ export class SolanaTransactionTransport implements TransactionTransport {
             const blockHeight = await connection.getBlockHeight("confirmed");
             highestObservedBlockHeight = Math.max(highestObservedBlockHeight ?? blockHeight, blockHeight);
             if (blockHeight > transaction.lastValidBlockHeight) {
-              // Always check signature status first. A transaction can land on a
-              // different RPC even after the block height has passed locally.
               const finalStatus = await this.confirmOnConnection(connection, signature);
               if (finalStatus === "confirmed" || finalStatus === "failed") return finalStatus;
             }
@@ -126,4 +154,39 @@ export class SolanaTransactionTransport implements TransactionTransport {
       return "unknown";
     }
   }
+
+  private isSubmissionUncertainError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const text = `${error.name} ${error.message}`.toLowerCase();
+    return /abort|timeout|timed out|timedout|network|fetch failed|socket|econnreset|etimedout|eai_again|502|503|504/.test(text);
+  }
+
+  private deriveSignature(transaction: BuiltTransaction): string | undefined {
+    try {
+      const parsed = VersionedTransaction.deserialize(transaction.serialized);
+      const signature = parsed.signatures[0];
+      if (!signature || signature.every((byte) => byte === 0)) return undefined;
+      return encodeBase58(signature);
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function encodeBase58(bytes: Uint8Array): string {
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) + BigInt(byte);
+  let encoded = "";
+  while (value > 0n) {
+    const remainder = Number(value % 58n);
+    encoded = BASE58_ALPHABET[remainder] + encoded;
+    value /= 58n;
+  }
+  for (const byte of bytes) {
+    if (byte !== 0) break;
+    encoded = `1${encoded}`;
+  }
+  return encoded || "1";
 }
