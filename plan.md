@@ -38,9 +38,9 @@
 - [x] Treat RPC timeout as uncertainty, not failure.
 
 ### 5. Reconciliation before rebuild
-- [~] When status becomes `UNKNOWN`, reconcile across healthy RPC endpoints before rebuilding.
+- [x] When status becomes `UNKNOWN`, reconcile across healthy RPC endpoints before rebuilding.
 - [x] Check signature history/status before creating another transaction.
-- [~] Reconcile token balance/position state where required.
+- [x] Reconcile token balance/position state where required.
 - [x] Never rebuild while the previous execution could still have landed without first reconciling.
 
 ### 6. Safe rebuild flow
@@ -61,6 +61,8 @@
 - [x] Rebuild always uses a fresh quote.
 - [x] Rebuild always uses a fresh blockhash/expiry.
 - [x] Old serialized transaction is never resent after expiry.
+- [x] UNKNOWN confirmation is reconciled before terminal position state is accepted.
+- [x] Ambiguous/unavailable reconciliation remains UNKNOWN and cannot trigger a rebuild.
 
 ## P0 — Real Solana/Jupiter dry-run
 
@@ -246,7 +248,7 @@ Only begin after all P0/P1 gates pass.
 - [x] Blockhash expiry is detected correctly.
 - [x] Expired transactions are never blindly resent.
 - [x] Expiry triggers fresh quote + fresh build + fresh blockhash.
-- [~] `UNKNOWN` is reconciled before rebuilding.
+- [x] `UNKNOWN` is reconciled before rebuilding.
 - [x] Duplicate broadcasts are prevented.
 - [x] Real Jupiter quote/build/simulation path works in dry-run.
 - [ ] RPC failover survives load and degraded endpoints.
@@ -262,10 +264,10 @@ Only begin after all P0/P1 gates pass.
 
 1. [x] ExecutionAttempt + blockhash/expiry metadata.
 2. [x] Expiry-aware transport and confirmation.
-3. [~] Reconciliation and safe rebuild orchestration.
+3. [x] Reconciliation and safe rebuild orchestration.
 4. [x] P0 expiry/confirmation tests.
 5. [x] Real Jupiter/Solana dry-run.
-6. [ ] RPC failover/load tests.
+6. [~] RPC failover/load tests.
 7. [ ] Latency instrumentation.
 8. [ ] Latency benchmarks.
 9. [ ] Liquidity/rug engine.
@@ -278,6 +280,6 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** Complete UNKNOWN token/position reconciliation; RPC failure-path unit coverage now includes timeout-like failures, rate-limit/server-error failures, stale/cooldown behavior, unavailable endpoints, failover, and recovery. Real mainnet Jupiter quote/build/simulation and dry-run safety tests remain covered, and live trading remains OFF.  
+**Current focus:** P0 UNKNOWN reconciliation is now explicitly fail-closed: UNKNOWN confirmation is reconciled through the position reconciler before terminal state acceptance; ambiguous/unavailable reconciliation remains UNKNOWN and cannot trigger a rebuild. RPC failure-path coverage is in place. Next focus is P1 RPC failover/load hardening. Real mainnet Jupiter quote/build/simulation and dry-run safety remain covered, and live trading remains OFF.  
 **Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful before the latest test-only commits.  
 **Live trading:** OFF.
