@@ -109,7 +109,7 @@ priceMonitor.on("tick", (tick) => {
     prices,
     liquidity,
     hasValidRoute: true,
-    priceImpactBps: 0
+    priceImpactBps: tick.priceImpactBps
   });
 
   if (!decision) return;
@@ -136,8 +136,15 @@ normalizer.on("quoteUnavailable", (event) => {
   if (decision) sellExecutor.enqueue(decision, event.mint, event.marketEventAt);
 });
 
-wsProvider.on("marketEvent", (event: { receivedAt: number }) => {
-  void normalizer.handleMarketEvent(event.receivedAt);
+normalizer.on("quoteError", (event) => {
+  logger.warn("market_quote_error", {
+    mint: event.mint,
+    error: event.error
+  });
+});
+
+wsProvider.on("marketEvent", (event: { receivedAt: number; mint?: string }) => {
+  void normalizer.handleMarketEvent(event.receivedAt, event.mint);
 });
 
 wsProvider.on("stale", () => {
@@ -165,7 +172,7 @@ if (config.mode === "paper") {
   const synthetic = [1.01, 1.0, 0.99, 0.98, 0.97, 0.95, 0.93];
   for (const [i, price] of synthetic.entries()) {
     setTimeout(() => {
-      void normalizer.handleMarketEvent(Date.now());
+      void normalizer.handleMarketEvent(Date.now(), mint);
       priceMonitor.ingest({ mint, price, timestamp: Date.now(), volumeBuy: 50 - i * 4, volumeSell: 50 + i * 8 });
       liquidityMonitor.ingest({ mint, liquidityUsd: 100000 - i * 8000, timestamp: Date.now() });
     }, i * 250);
