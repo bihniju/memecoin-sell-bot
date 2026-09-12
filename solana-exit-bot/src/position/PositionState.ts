@@ -5,6 +5,7 @@ export const createPosition = (input: {
   decimals: number;
   walletAddress: string;
   amount: number;
+  amountRaw?: bigint;
   entryPrice: number;
   entryTimestamp?: number;
 }): Position => {
@@ -16,6 +17,7 @@ export const createPosition = (input: {
     decimals: input.decimals,
     walletAddress: input.walletAddress,
     amount: input.amount,
+    amountRaw: input.amountRaw,
     entryPrice: input.entryPrice,
     entryValue,
     entryTimestamp,
