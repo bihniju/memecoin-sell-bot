@@ -118,7 +118,9 @@
 - [x] Handle timeout-like failures, 429/5xx health failures, unavailable endpoints, and connection failure paths.
 - [x] Test endpoint recovery and cooldown behavior.
 - [x] Test endpoint flapping and stale health information.
-- [ ] Ensure a slow endpoint cannot block a healthy endpoint indefinitely.
+- [x] Bound RPC send time so a slow/hanging endpoint cannot block the exit path indefinitely; uncertain submissions remain subject to reconciliation and are never blindly resent.
+- [x] Add tests proving an uncertain timed-out/5xx submission does not trigger a blind second broadcast.
+- [ ] Complete cloud load validation across multiple RPC endpoints under sustained/concurrent exit load.
 
 ### 13. Load tests
 - [ ] Benchmark 10 exits/sec.
@@ -126,6 +128,9 @@
 - [ ] Benchmark 50 exits/sec.
 - [ ] Benchmark 100 exits/sec.
 - [ ] Measure queue growth, latency, errors, duplicate prevention, and memory usage.
+- [ ] Publish/record the benchmark results and use them to set safe operating limits.
+
+> **CI note:** workflow run `34726228617` failed before the RPC benchmark because TypeScript compilation found a missing `Position.walletAddress` fixture field. The fixture was corrected in commit `efbb14f6110541cfe38851be56f5f8e3a58cbfa2`; that correction has not yet been validated by a completed RPC-load workflow run, so the load milestone remains open.
 
 ## P1 — Confirmation resilience
 
@@ -272,7 +277,7 @@ Only begin after all P0/P1 gates pass.
 3. [x] Reconciliation and safe rebuild orchestration.
 4. [x] P0 expiry/confirmation tests.
 5. [x] Real Jupiter/Solana dry-run.
-6. [~] RPC failover/load tests.
+6. [~] RPC failover/load tests — implementation and failure-path coverage are substantially complete; cloud load validation is still pending.
 7. [ ] Latency instrumentation.
 8. [ ] Latency benchmarks.
 9. [ ] Liquidity/rug engine.
@@ -285,6 +290,7 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** P1 RPC resilience under load. Endpoint cooldown/recovery, flapping protection, latency prioritization, and degraded endpoint handling now have unit coverage. Remaining work is preventing a slow RPC from blocking a healthy endpoint indefinitely, followed by controlled 10/25/50/100 exits-per-second load tests. Real mainnet Jupiter quote/build/simulation and dry-run safety remain covered, and live trading remains OFF.  
-**Latest cloud validation:** GitHub Actions run `34704859918`, job `103582971470` — successful before the latest test-only commits.  
+**Current focus:** Finish P1 RPC resilience validation. The code now bounds hanging RPC sends, fails closed on ambiguous reconciliation, uses endpoint health/cooldown/latency prioritization, and has tests for timeout/429/5xx/unavailable/failover and duplicate-broadcast prevention. The remaining RPC gate is the actual 10/25/50/100 exits-per-second load validation and a completed cloud run on the corrected commit. After that, move to latency instrumentation and benchmarking, then liquidity/rug detection.  
+**Latest successful real mainnet validation:** GitHub Actions run `34704859918`, job `103582971470` — build, audit, 61/61 unit tests, real Jupiter quote/build/simulation, and dry-run safety gate all passed.  
+**Latest RPC-load failure:** run `34726228617` — failed at build before benchmark execution; the specific `Position.walletAddress` fixture issue was corrected in `efbb14f6110541cfe38851be56f5f8e3a58cbfa2`.  
 **Live trading:** OFF.
