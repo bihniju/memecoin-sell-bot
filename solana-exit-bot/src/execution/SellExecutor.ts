@@ -7,7 +7,7 @@ import { QuoteProvider } from "./QuoteProvider.js";
 import { RetryManager } from "./RetryManager.js";
 import { ExecutionAttemptTracker } from "./ExecutionAttempt.js";
 import { signBuiltTransaction, SellTransactionBuilder } from "./TransactionBuilder.js";
-import { TransactionTransport } from "./TransactionTransport.js";
+import { TransactionSubmissionUncertainError, TransactionTransport } from "./TransactionTransport.js";
 
 interface QueueItem {
   mint: string;
@@ -200,7 +200,6 @@ export class SellExecutor {
         tracker.markExpired(timestamps.confirmationAt);
       } else if (status === "unknown") {
         tracker.markUnknown();
-        // Never automatically rebuild an unknown broadcast. It may still land.
         this.positions.setSellState(position.mint, "UNKNOWN");
       } else {
         tracker.markFailed(timestamps.confirmationAt);
@@ -211,6 +210,21 @@ export class SellExecutor {
       this.logExit(position, decision, quote, priorityFeeMicrolamports, signature, status, timestamps, endpoint, duplicate);
       return { submitted: true, signature, reason: status, status };
     } catch (error) {
+      if (error instanceof TransactionSubmissionUncertainError) {
+        timestamps.transactionSubmittedAt = submittedAt;
+        tracker.markSubmitted(error.endpoint, submittedAt);
+        tracker.markProcessing();
+        tracker.markUnknown();
+        this.positions.setSellState(position.mint, "UNKNOWN");
+        this.logger.warn("execution_attempt_uncertain", {
+          ...tracker.attempt,
+          signature: error.signature,
+          error: error.message
+        });
+        this.logExit(position, decision, quote, priorityFeeMicrolamports, error.signature, "unknown", timestamps, error.endpoint, false);
+        return { submitted: true, signature: error.signature, reason: "unknown", status: "unknown" };
+      }
+
       tracker.markUnknown();
       this.logger.warn("execution_attempt_uncertain", { ...tracker.attempt, error: error instanceof Error ? error.message : String(error) });
       throw error;
