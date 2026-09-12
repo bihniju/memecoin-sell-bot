@@ -1,0 +1,73 @@
+name: Real Solana/Jupiter Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      wallet_public_key:
+        description: "Test wallet public key"
+        required: true
+        default: "68adSzS2CZised4BTryTKYjEc5MwNaHHE38FpXymeKv7"
+        type: string
+      position_mint:
+        description: "Test token mint"
+        required: true
+        default: "2BCgn48Y674aunyexfMsCjTeQytcpUDASM28fykFFfS8"
+        type: string
+      rpc_url:
+        description: "Solana RPC endpoint"
+        required: true
+        default: "https://api.mainnet-beta.solana.com"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  real-dry-run:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: solana-exit-bot
+    env:
+      MODE: dry-run
+      DRY_RUN: "true"
+      LIVE_TRADING_ENABLED: "false"
+      WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key }}
+      POSITION_MINT: ${{ inputs.position_mint }}
+      RPC_ENDPOINTS: ${{ inputs.rpc_url }}
+      POSITION_DECIMALS: "6"
+      POSITION_AMOUNT: "1"
+      POSITION_ENTRY_PRICE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: solana-exit-bot/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Security audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Typecheck / build
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run real mainnet dry-run
+        run: npm run dry-run:real
+
+      - name: Assert no broadcast code path was requested
+        run: |
+          test "$MODE" = "dry-run"
+          test "$DRY_RUN" = "true"
+          test "$LIVE_TRADING_ENABLED" = "false"
+          echo "Safety gate passed: dry-run only; no transaction broadcast is permitted."
