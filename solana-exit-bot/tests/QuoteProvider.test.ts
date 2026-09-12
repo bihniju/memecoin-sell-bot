@@ -83,6 +83,14 @@ describe("JupiterQuoteProvider failure handling", () => {
     expect(quote.expectedOutAmount).toBe(9_500_000n);
   });
 
+  test("surfaces malformed JSON without retrying it as a transient HTTP failure", async () => {
+    const malformed = new Response("not-json", { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn(async () => malformed));
+
+    const provider = new JupiterQuoteProvider("https://quote.test", undefined, { retries: 3, timeoutMs: 250, cacheMs: 0 });
+    await expect(provider.getQuote({ inputMint: position.mint, outputMint: "So11111111111111111111111111111111111111112", amount: 10_000_000n, slippageBps: 250 })).rejects.toThrow();
+  });
+
   test("marks a successful response with no route as unavailable", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => response(200, { inAmount: "10000000", outAmount: "0", routePlan: [], priceImpactPct: "0" })));
 
