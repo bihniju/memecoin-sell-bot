@@ -96,7 +96,8 @@ describe("TransactionTransport", () => {
       },
       async getSignatureStatus() {
         return { value: { err: null, confirmationStatus: "confirmed" } };
-      }
+      },
+      async getBlockHeight() { return 50; }
     };
     const transport = new SolanaTransactionTransport(managerFor(connection) as never, {
       skipPreflight: false, maxRetries: 2, confirmationTimeoutMs: 25
