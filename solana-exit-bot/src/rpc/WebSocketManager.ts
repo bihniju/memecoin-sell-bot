@@ -22,13 +22,31 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
   private reconnectTimer?: NodeJS.Timeout;
   private lastMessageAt = 0;
   private manualClose = false;
+  private endpointIndex = 0;
 
-  constructor(private readonly endpoint: string, private readonly options: ProviderOptions) { super(); }
+  constructor(private readonly endpoints: string | string[], private readonly options: ProviderOptions) {
+    super();
+    if ((typeof endpoints === "string" ? [endpoints] : endpoints).length === 0) throw new Error("At least one WebSocket endpoint is required");
+  }
+
+  private get endpointList(): string[] { return typeof this.endpoints === "string" ? [this.endpoints] : this.endpoints; }
+  private get currentEndpoint(): string { return this.endpointList[this.endpointIndex % this.endpointList.length]; }
 
   async connect(): Promise<void> {
     this.manualClose = false;
-    await this.openSocket();
-    this.startHealthTimers();
+    let lastError: unknown;
+    for (let i = 0; i < this.endpointList.length; i += 1) {
+      try {
+        await this.openSocket(this.currentEndpoint);
+        this.startHealthTimers();
+        return;
+      } catch (error) {
+        lastError = error;
+        this.endpointIndex = (this.endpointIndex + 1) % this.endpointList.length;
+      }
+    }
+    this.scheduleReconnect();
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   async disconnect(): Promise<void> {
@@ -58,28 +76,33 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
 
   isStale(): boolean { return !this.connected || Date.now() - this.lastMessageAt > this.options.staleMs; }
 
-  private async openSocket(): Promise<void> {
+  private async openSocket(endpoint: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(this.endpoint);
+      const socket = new WebSocket(endpoint);
       this.ws = socket;
+      let settled = false;
 
       socket.once("open", () => {
+        settled = true;
         this.connected = true;
         this.reconnectAttempts = 0;
         this.lastMessageAt = Date.now();
-        this.emit("connected");
+        this.emit("connected", { endpoint });
         resolve();
       });
       socket.on("message", (msg) => this.handleMessage(msg.toString()));
       socket.on("pong", () => { this.lastMessageAt = Date.now(); });
       socket.on("close", () => {
         this.connected = false;
-        this.emit("disconnected");
-        if (!this.manualClose) this.scheduleReconnect();
+        this.emit("disconnected", { endpoint });
+        if (!this.manualClose) {
+          this.endpointIndex = (this.endpointIndex + 1) % this.endpointList.length;
+          this.scheduleReconnect();
+        }
       });
       socket.on("error", (err) => {
         this.emit("error", err);
-        if (!this.connected) reject(err);
+        if (!settled) reject(err);
       });
     });
   }
@@ -114,26 +137,15 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
 
     const params = parsed.params as { result?: unknown; subscription?: number } | undefined;
     if (!params) return;
-
     const subscriptionId = params.subscription;
-    const subscription = typeof subscriptionId === "number"
-      ? [...this.subscriptions.values()].find((item) => item.id === subscriptionId)
-      : undefined;
+    const subscription = typeof subscriptionId === "number" ? [...this.subscriptions.values()].find((item) => item.id === subscriptionId) : undefined;
     const mint = subscription?.key.startsWith("mint:") ? subscription.key.slice(5) : undefined;
-
     const result = params.result as Record<string, unknown> | undefined;
+
     if (result && typeof result === "object" && ("value" in result || "context" in result)) {
-      this.emit("marketEvent", {
-        type: "logs",
-        mint,
-        subscription: subscriptionId,
-        slot: (result.context as { slot?: number } | undefined)?.slot,
-        receivedAt: Date.now(),
-        result
-      });
+      this.emit("marketEvent", { type: "logs", mint, subscription: subscriptionId, slot: (result.context as { slot?: number } | undefined)?.slot, receivedAt: Date.now(), result });
       return;
     }
-
     const slot = result?.slot;
     if (typeof slot === "number") this.emit("marketEvent", { type: "slot", mint, subscription: subscriptionId, slot, receivedAt: Date.now() });
   }
@@ -144,7 +156,7 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
     }, this.options.heartbeatMs);
     this.healthTimer = setInterval(() => {
       if (this.isStale()) {
-        this.emit("stale");
+        this.emit("stale", { endpoint: this.currentEndpoint, staleMs: Date.now() - this.lastMessageAt });
         if (!this.manualClose) this.scheduleReconnect();
       }
     }, Math.max(250, Math.floor(this.options.heartbeatMs / 2)));
@@ -157,14 +169,17 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = undefined;
       try {
-        await this.openSocket();
+        await this.openSocket(this.currentEndpoint);
         const keys = [...this.subscriptions.keys()];
         this.subscriptions.clear();
         for (const key of keys) {
           await this.subscribe(key);
           this.emit("resubscribe", key);
         }
-      } catch { this.scheduleReconnect(); }
+      } catch {
+        this.endpointIndex = (this.endpointIndex + 1) % this.endpointList.length;
+        this.scheduleReconnect();
+      }
     }, delay);
   }
 
@@ -174,7 +189,7 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
     const id = this.requestId++;
     socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     return await new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => { this.off(`rpc:${id}`, onMessage); reject(new Error(`WS RPC timeout for ${method}`)); }, 10_000);
+      const timeout = setTimeout(() => { this.off(`rpc:${id}`, onMessage); reject(new Error(`WS RPC timeout for ${method}`)); }, 3_000);
       const onMessage = (response: Record<string, unknown>): void => {
         clearTimeout(timeout);
         this.off(`rpc:${id}`, onMessage);
@@ -197,13 +212,13 @@ export class WebSocketManager extends EventEmitter implements MarketDataProvider
 }
 
 export class SolanaWebSocketAdapter extends WebSocketManager {
-  constructor(endpoint: string, heartbeatMs: number, staleMs: number) {
-    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 500, reconnectMaxMs: 10_000 });
+  constructor(endpoint: string | string[], heartbeatMs: number, staleMs: number) {
+    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 250, reconnectMaxMs: 5_000 });
   }
 }
 
 export class HeliusWebSocketAdapter extends WebSocketManager {
-  constructor(endpoint: string, heartbeatMs: number, staleMs: number) {
-    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 250, reconnectMaxMs: 5_000 });
+  constructor(endpoint: string | string[], heartbeatMs: number, staleMs: number) {
+    super(endpoint, { heartbeatMs, staleMs, reconnectBaseMs: 150, reconnectMaxMs: 3_000 });
   }
 }
