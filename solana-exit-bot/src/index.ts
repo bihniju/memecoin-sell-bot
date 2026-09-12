@@ -32,15 +32,8 @@ const rpcManager = new RpcManager(config.rpc.rpcEndpoints.length ? config.rpc.rp
 
 const quoteProvider: QuoteProvider = config.mode === "paper"
   ? new SimulatedQuoteProvider()
-  : new JupiterQuoteProvider(config.market.quoteApiUrl, config.market.jupiterApiKey, {
-      timeoutMs: quoteTimeoutMs,
-      retries: config.execution.quoteRetries ?? 2,
-      cacheMs: 100
-    });
-const txBuilder = new JupiterSellTransactionBuilder(config.market.swapApiUrl, config.mode !== "live", config.market.jupiterApiKey, {
-  timeoutMs: quoteTimeoutMs + 300,
-  retries: 1
-});
+  : new JupiterQuoteProvider(config.market.quoteApiUrl, config.market.jupiterApiKey, { timeoutMs: quoteTimeoutMs, retries: config.execution.quoteRetries ?? 2, cacheMs: 100 });
+const txBuilder = new JupiterSellTransactionBuilder(config.market.swapApiUrl, config.mode !== "live", config.market.jupiterApiKey, { timeoutMs: quoteTimeoutMs + 300, retries: 1 });
 const transport = new SolanaTransactionTransport(rpcManager, {
   skipPreflight: config.execution.skipPreflight,
   maxRetries: config.execution.maxRpcSendRetries,
@@ -70,31 +63,38 @@ const wsProvider: WebSocketManager = config.market.websocketProvider === "helius
   ? new HeliusWebSocketAdapter(wsEndpoints, config.market.heartbeatMs, staleMarketMs)
   : new SolanaWebSocketAdapter(wsEndpoints, config.market.heartbeatMs, staleMarketMs);
 
+const evaluateRisk = (positionMint: string, overrides: { hasValidRoute?: boolean; priceImpactBps?: number; emergencyFlag?: boolean; marketDataStale?: boolean } = {}) => {
+  const position = positions.get(positionMint);
+  if (!position) return;
+  const decision = riskEngine.evaluate({
+    position,
+    prices: priceMonitor.getTicks(positionMint, config.risk.fallingWindowMs),
+    liquidity: liquidityMonitor.getSnapshots(positionMint, config.risk.fallingWindowMs),
+    hasValidRoute: overrides.hasValidRoute ?? true,
+    priceImpactBps: overrides.priceImpactBps,
+    emergencyFlag: overrides.emergencyFlag,
+    marketDataStale: overrides.marketDataStale,
+    rpcCongested: rpcManager.isCongested(rpcManager.getActiveEndpoint(), config.execution.congestionLatencyMs ?? 800)
+  });
+  if (!decision) return;
+  logger.warn("risk_triggered", { mint: positionMint, trigger: decision.trigger, reason: decision.reason, riskScore: decision.riskScore });
+  sellExecutor.enqueue(decision, positionMint, Date.now());
+};
+
 priceMonitor.on("tick", (tick) => {
   const p = positions.updatePrice(tick.mint, tick.price);
   if (!p) return;
-  const decision = riskEngine.evaluate({ position: p, prices: priceMonitor.getTicks(tick.mint, config.risk.fallingWindowMs), liquidity: liquidityMonitor.getSnapshots(tick.mint, config.risk.fallingWindowMs), hasValidRoute: true, priceImpactBps: tick.priceImpactBps });
-  if (!decision) return;
-  logger.warn("risk_triggered", { mint: tick.mint, trigger: decision.trigger, reason: decision.reason, riskScore: decision.riskScore });
-  sellExecutor.enqueue(decision, tick.mint, tick.timestamp);
+  evaluateRisk(tick.mint, { priceImpactBps: tick.priceImpactBps });
 });
 
-normalizer.on("quoteUnavailable", (event) => {
-  const p = positions.get(event.mint);
-  if (!p) return;
-  const decision = riskEngine.evaluate({ position: p, prices: priceMonitor.getTicks(event.mint, config.risk.fallingWindowMs), liquidity: liquidityMonitor.getSnapshots(event.mint, config.risk.fallingWindowMs), hasValidRoute: false, priceImpactBps: config.risk.maxPriceImpactBps + 1 });
-  if (decision) sellExecutor.enqueue(decision, event.mint, event.marketEventAt);
-});
+normalizer.on("quoteUnavailable", (event) => evaluateRisk(event.mint, { hasValidRoute: false, priceImpactBps: config.risk.maxPriceImpactBps + 1 }));
 normalizer.on("quoteError", (event) => logger.warn("market_quote_error", { mint: event.mint, error: event.error }));
 wsProvider.on("marketEvent", (event: { receivedAt: number; mint?: string }) => { void normalizer.handleMarketEvent(event.receivedAt, event.mint); });
 wsProvider.on("stale", (event?: { endpoint?: string; staleMs?: number }) => {
   const observedStaleMs = event?.staleMs ?? staleMarketMs;
   logger.warn("market_data_stale", { endpoint: event?.endpoint ?? defaultWsEndpoint, staleMs: observedStaleMs });
   if (!(config.risk.emergencyOnStaleMarket ?? true) || observedStaleMs < staleMarketMs) return;
-  const p = positions.get(mint);
-  if (!p) return;
-  const decision = riskEngine.evaluate({ position: p, prices: priceMonitor.getTicks(mint, config.risk.fallingWindowMs), liquidity: liquidityMonitor.getSnapshots(mint, config.risk.fallingWindowMs), hasValidRoute: false, emergencyFlag: true });
-  if (decision) sellExecutor.enqueue(decision, mint, Date.now());
+  evaluateRisk(mint, { hasValidRoute: false, emergencyFlag: true, marketDataStale: true });
 });
 wsProvider.on("error", (error) => logger.warn("market_ws_error", { error: String(error) }));
 
