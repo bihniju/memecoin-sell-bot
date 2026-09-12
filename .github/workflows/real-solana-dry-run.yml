@@ -84,3 +84,5 @@ jobs:
           test "$DRY_RUN" = "true"
           test "$LIVE_TRADING_ENABLED" = "false"
           echo "Safety gate passed: dry-run only; no transaction broadcast is permitted."
+
+      # Force a fresh workflow revision so the corrected target is executed.
