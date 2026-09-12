@@ -8,6 +8,7 @@ import { TransactionTransport } from "../src/execution/TransactionTransport.js";
 import { SellTransactionBuilder } from "../src/execution/TransactionBuilder.js";
 import { Logger } from "../src/logging/Logger.js";
 import { PositionManager } from "../src/position/PositionManager.js";
+import { PositionReconciler, PositionReconciliationResult } from "../src/position/PositionReconciler.js";
 import { createPosition } from "../src/position/PositionState.js";
 import { BotConfig, Quote, TriggerDecision } from "../src/types.js";
 
@@ -128,6 +129,16 @@ class TestTransport implements TransactionTransport {
 
   async confirm() {
     return this.status;
+  }
+}
+
+class TestReconciler implements Pick<PositionReconciler, "reconcile"> {
+  calls = 0;
+  constructor(private readonly result: PositionReconciliationResult) {}
+
+  async reconcile() {
+    this.calls += 1;
+    return this.result;
   }
 }
 
@@ -309,6 +320,84 @@ describe("SellExecutor", () => {
     executor.enqueue(decision, "m");
     await new Promise((r) => setTimeout(r, 50));
 
+    expect(pm.get("m")?.sellState).toBe("UNKNOWN");
+  });
+
+  test("unknown confirmation is reconciled before finalizing SOLD/PARTIALLY_SOLD and never retried", async () => {
+    const config = baseConfig();
+    const pm = new PositionManager();
+    pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+    const quote: Quote = {
+      provider: "test",
+      inAmount: 100n,
+      expectedOutAmount: 90n,
+      minimumOutAmount: 80n,
+      priceImpactBps: 300,
+      routeAvailable: true,
+      routeInfo: {},
+      timestamp: Date.now()
+    };
+    const transport = new TestTransport("unknown");
+    const builder = new TestBuilder();
+    const reconciler = new TestReconciler("PARTIALLY_SOLD");
+    const executor = new SellExecutor(
+      config,
+      pm,
+      new TestQuoteProvider(quote),
+      builder,
+      new RetryManager(config.execution),
+      new PriorityFeeManager(config.execution),
+      transport,
+      new Logger("error"),
+      Keypair.generate(),
+      reconciler as PositionReconciler
+    );
+
+    executor.enqueue(decision, "m");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(reconciler.calls).toBe(1);
+    expect(builder.builds).toBe(1);
+    expect(transport.sends).toBe(1);
+    expect(pm.get("m")?.sellState).toBe("SELLING");
+  });
+
+  test("ambiguous UNKNOWN reconciliation is fail-closed and cannot trigger a rebuild", async () => {
+    const config = baseConfig();
+    const pm = new PositionManager();
+    pm.upsert(createPosition({ mint: "m", decimals: 6, walletAddress: Keypair.generate().publicKey.toBase58(), amount: 100, entryPrice: 1 }));
+    const quote: Quote = {
+      provider: "test",
+      inAmount: 100n,
+      expectedOutAmount: 90n,
+      minimumOutAmount: 80n,
+      priceImpactBps: 300,
+      routeAvailable: true,
+      routeInfo: {},
+      timestamp: Date.now()
+    };
+    const transport = new TestTransport("unknown");
+    const builder = new TestBuilder();
+    const reconciler = new TestReconciler("AMBIGUOUS");
+    const executor = new SellExecutor(
+      config,
+      pm,
+      new TestQuoteProvider(quote),
+      builder,
+      new RetryManager(config.execution),
+      new PriorityFeeManager(config.execution),
+      transport,
+      new Logger("error"),
+      Keypair.generate(),
+      reconciler as PositionReconciler
+    );
+
+    executor.enqueue(decision, "m");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(reconciler.calls).toBe(1);
+    expect(builder.builds).toBe(1);
+    expect(transport.sends).toBe(1);
     expect(pm.get("m")?.sellState).toBe("UNKNOWN");
   });
 });
