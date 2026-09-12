@@ -105,7 +105,7 @@ describe("TransactionTransport", () => {
 
     const sent = await transport.send(transaction);
     expect(sent.duplicate).toBe(false);
-    expect(sent.signature).toHaveLength(88);
+    expect(sent.signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{80,88}$/);
     expect(sends).toBe(1);
   });
 
