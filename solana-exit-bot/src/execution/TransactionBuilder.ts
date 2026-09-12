@@ -38,7 +38,15 @@ export class JupiterSellTransactionBuilder implements SellTransactionBuilder {
         ]
       }).compileToV0Message([]);
       const tx = new VersionedTransaction(message);
-      return { serialized: tx.serialize(), transaction: tx, priorityFeeMicrolamports, minOutAmount: quote.minimumOutAmount };
+      return {
+        serialized: tx.serialize(),
+        transaction: tx,
+        priorityFeeMicrolamports,
+        minOutAmount: quote.minimumOutAmount,
+        recentBlockhash: message.recentBlockhash,
+        blockhashFetchedAt: Date.now(),
+        quoteId: quote.quoteId
+      };
     }
 
     if (!quote.routeInfo || typeof quote.routeInfo !== "object") {
@@ -48,8 +56,6 @@ export class JupiterSellTransactionBuilder implements SellTransactionBuilder {
     const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
     if (this.apiKey) headers["x-api-key"] = this.apiKey;
 
-    // Jupiter expects maxLamports as a total prioritization budget, while the bot
-    // config expresses priority fee as micro-lamports per compute unit.
     const estimatedComputeUnits = 200_000;
     const maxLamports = Math.max(10_000, Math.ceil((priorityFeeMicrolamports * estimatedComputeUnits) / 1_000_000));
     const attempts = Math.max(1, Math.trunc(this.options.retries ?? 1) + 1);
@@ -91,14 +97,25 @@ export class JupiterSellTransactionBuilder implements SellTransactionBuilder {
           throw new Error(`Jupiter swap build transient failure: ${res.status}`);
         }
 
-        const body = (await res.json()) as { swapTransaction?: string };
+        const body = (await res.json()) as { swapTransaction?: string; lastValidBlockHeight?: number };
         if (!body.swapTransaction) throw new Error("Jupiter swap response missing swapTransaction");
+        if (!Number.isInteger(body.lastValidBlockHeight) || body.lastValidBlockHeight < 0) {
+          throw new Error("Jupiter swap response missing valid lastValidBlockHeight");
+        }
+
         const tx = VersionedTransaction.deserialize(Buffer.from(body.swapTransaction, "base64"));
+        const recentBlockhash = tx.message.recentBlockhash;
+        if (!recentBlockhash) throw new Error("Jupiter swap transaction missing recent blockhash");
+
         return {
           serialized: tx.serialize(),
           transaction: tx,
           priorityFeeMicrolamports,
-          minOutAmount: quote.minimumOutAmount
+          minOutAmount: quote.minimumOutAmount,
+          recentBlockhash,
+          lastValidBlockHeight: body.lastValidBlockHeight,
+          blockhashFetchedAt: Date.now(),
+          quoteId: quote.quoteId
         };
       } catch (error) {
         lastError = error;

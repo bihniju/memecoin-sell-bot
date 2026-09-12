@@ -5,6 +5,7 @@ import { BotConfig, ExitLatencyTimestamps, Position, Quote, SellExecutionResult,
 import { PriorityFeeManager } from "./PriorityFeeManager.js";
 import { QuoteProvider } from "./QuoteProvider.js";
 import { RetryManager } from "./RetryManager.js";
+import { ExecutionAttemptTracker } from "./ExecutionAttempt.js";
 import { signBuiltTransaction, SellTransactionBuilder } from "./TransactionBuilder.js";
 import { TransactionTransport } from "./TransactionTransport.js";
 
@@ -19,6 +20,7 @@ export class SellExecutor {
   private running = false;
   private readonly activeMints = new Set<string>();
   private readonly lastDecisionByMint = new Map<string, { trigger: TriggerDecision["trigger"]; at: number }>();
+  private executionSequence = 0;
 
   constructor(
     private readonly config: BotConfig,
@@ -38,13 +40,7 @@ export class SellExecutor {
     if (position.sellState === "SELLING" || position.sellState === "SOLD") return;
 
     const previous = this.lastDecisionByMint.get(mint);
-    if (
-      previous &&
-      previous.trigger === decision.trigger &&
-      Date.now() - previous.at < this.config.risk.decisionCooldownMs
-    ) {
-      return;
-    }
+    if (previous && previous.trigger === decision.trigger && Date.now() - previous.at < this.config.risk.decisionCooldownMs) return;
 
     this.lastDecisionByMint.set(mint, { trigger: decision.trigger, at: Date.now() });
     this.queue.push({ mint, decision, marketEventAt });
@@ -72,9 +68,7 @@ export class SellExecutor {
           error: error instanceof Error ? error.message : String(error)
         });
         const position = this.positions.get(item.mint);
-        if (position && position.sellState === "SELLING") {
-          this.positions.setSellState(item.mint, "FAILED");
-        }
+        if (position && position.sellState === "SELLING") this.positions.setSellState(item.mint, "FAILED");
       } finally {
         this.activeMints.delete(item.mint);
       }
@@ -84,8 +78,7 @@ export class SellExecutor {
 
   private async processItem(mint: string, decision: TriggerDecision, marketEventAt: number): Promise<void> {
     const position = this.positions.get(mint);
-    if (!position) return;
-    if (position.sellState === "SOLD") return;
+    if (!position || position.sellState === "SOLD") return;
 
     this.positions.setSellState(mint, "SELLING");
     position.lastTrigger = decision.trigger;
@@ -100,12 +93,7 @@ export class SellExecutor {
       try {
         const riskDecisionAt = Date.now();
         const quoteRequestedAt = Date.now();
-        const quote = await this.quoteProvider.quoteForPosition(
-          current,
-          this.config.market.outputMint,
-          decision.sellPct,
-          this.config.execution.quoteSlippageBps
-        );
+        const quote = await this.quoteProvider.quoteForPosition(current, this.config.market.outputMint, decision.sellPct, this.config.execution.quoteSlippageBps);
         const quoteReceivedAt = Date.now();
 
         const quoteValidation = this.validateQuote(current, quote);
@@ -118,12 +106,7 @@ export class SellExecutor {
         const emergencyFee = decision.trigger === "EMERGENCY" || decision.riskScore >= this.config.risk.riskScoreEmergency;
         const priorityFeeMicrolamports = await this.feeManager.resolveFee(decision, attempt, emergencyFee);
         const walletPubkey = this.resolveWalletPublicKey(current);
-        const tx = await this.txBuilder.buildSellTransaction({
-          wallet: walletPubkey,
-          position: current,
-          quote,
-          priorityFeeMicrolamports
-        });
+        const tx = await this.txBuilder.buildSellTransaction({ wallet: walletPubkey, position: current, quote, priorityFeeMicrolamports });
 
         const timestamps: ExitLatencyTimestamps = {
           marketEventAt,
@@ -135,9 +118,7 @@ export class SellExecutor {
 
         if (this.config.mode === "paper") {
           await new Promise((resolve) => setTimeout(resolve, this.config.execution.simulationLatencyMs));
-          const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER)
-            ? Number(quote.expectedOutAmount)
-            : Number.MAX_VALUE;
+          const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(quote.expectedOutAmount) : Number.MAX_VALUE;
           this.positions.applyFill(mint, decision.sellPct, expectedOut, "paper-simulated");
           this.logExit(current, decision, quote, priorityFeeMicrolamports, "paper-simulated", "confirmed", timestamps);
           return;
@@ -149,22 +130,22 @@ export class SellExecutor {
           return;
         }
 
-        if (!this.wallet) {
-          throw new Error("Live mode requires loaded wallet");
-        }
+        if (!this.wallet) throw new Error("Live mode requires loaded wallet");
 
         timestamps.transactionSignedAt = Date.now();
         const signed = signBuiltTransaction(tx, this.wallet);
-
-        const result = await this.submitAndTrack(signed, current, quote, decision, priorityFeeMicrolamports, timestamps);
+        const result = await this.submitAndTrack(signed, current, quote, decision, priorityFeeMicrolamports, timestamps, attempt);
         if (result.status === "confirmed" || result.status === "unknown") return;
 
+        // An expired transaction is safe to rebuild because the next retry performs
+        // a completely fresh quote + build. The old serialized transaction is never resent.
         lastFailure = result.reason;
-        this.logger.warn("Sell transaction failed; retrying", {
+        this.logger.warn("Sell transaction failed; retrying with a fresh execution attempt", {
           mint,
           attempt,
           maxAttempts: this.config.execution.maxSellRetries,
-          reason: result.reason
+          reason: result.reason,
+          expired: result.status === "expired"
         });
       } catch (error) {
         lastFailure = error instanceof Error ? error.message : String(error);
@@ -178,12 +159,7 @@ export class SellExecutor {
     }
 
     this.positions.setSellState(mint, "FAILED");
-    this.logger.error("All sell attempts exhausted", {
-      mint,
-      trigger: decision.trigger,
-      attempts: this.config.execution.maxSellRetries,
-      reason: lastFailure
-    });
+    this.logger.error("All sell attempts exhausted", { mint, trigger: decision.trigger, attempts: this.config.execution.maxSellRetries, reason: lastFailure });
   }
 
   private async submitAndTrack(
@@ -192,30 +168,53 @@ export class SellExecutor {
     quote: Quote,
     decision: TriggerDecision,
     priorityFeeMicrolamports: number,
-    timestamps: ExitLatencyTimestamps
+    timestamps: ExitLatencyTimestamps,
+    attemptNumber: number
   ): Promise<SellExecutionResult> {
+    const executionId = `${position.mint}:${decision.timestamp}:${++this.executionSequence}`;
+    const tracker = new ExecutionAttemptTracker({ executionId, positionId: position.mint, trigger: decision.trigger, rebuildCount: attemptNumber });
+    tracker.setTransaction({
+      transactionHash: Buffer.from(tx.serialized).toString("base64"),
+      recentBlockhash: tx.recentBlockhash,
+      lastValidBlockHeight: tx.lastValidBlockHeight,
+      quoteId: tx.quoteId
+    });
+    tracker.markBuilt(timestamps.transactionBuiltAt);
+    tracker.markSigned(timestamps.transactionSignedAt ?? Date.now());
+
     const submittedAt = Date.now();
-    const { signature, endpoint, duplicate } = await this.transport.send(tx);
-    timestamps.transactionSubmittedAt = submittedAt;
+    try {
+      const { signature, endpoint, duplicate } = await this.transport.send(tx);
+      timestamps.transactionSubmittedAt = submittedAt;
+      tracker.markSubmitted(endpoint, submittedAt);
+      tracker.markProcessing();
 
-    const status = await this.transport.confirm(signature);
-    timestamps.confirmationAt = Date.now();
+      const status = await this.transport.confirm(signature, tx);
+      timestamps.confirmationAt = Date.now();
 
-    if (status === "confirmed") {
-      const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER)
-        ? Number(quote.expectedOutAmount)
-        : Number.MAX_VALUE;
-      this.positions.applyFill(position.mint, decision.sellPct, expectedOut, signature);
-    } else if (status === "unknown") {
-      // Never retry an unknown broadcast automatically: the transaction may have landed.
-      this.positions.setSellState(position.mint, "UNKNOWN");
-    } else {
-      this.positions.setSellState(position.mint, "FAILED");
+      if (status === "confirmed") {
+        const expectedOut = quote.expectedOutAmount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(quote.expectedOutAmount) : Number.MAX_VALUE;
+        this.positions.applyFill(position.mint, decision.sellPct, expectedOut, signature);
+        tracker.markConfirmed(timestamps.confirmationAt);
+      } else if (status === "expired") {
+        tracker.markExpired(timestamps.confirmationAt);
+      } else if (status === "unknown") {
+        tracker.markUnknown();
+        // Never automatically rebuild an unknown broadcast. It may still land.
+        this.positions.setSellState(position.mint, "UNKNOWN");
+      } else {
+        tracker.markFailed(timestamps.confirmationAt);
+        this.positions.setSellState(position.mint, "FAILED");
+      }
+
+      this.logger.info("execution_attempt", tracker.attempt);
+      this.logExit(position, decision, quote, priorityFeeMicrolamports, signature, status, timestamps, endpoint, duplicate);
+      return { submitted: true, signature, reason: status, status };
+    } catch (error) {
+      tracker.markUnknown();
+      this.logger.warn("execution_attempt_uncertain", { ...tracker.attempt, error: error instanceof Error ? error.message : String(error) });
+      throw error;
     }
-
-    this.logExit(position, decision, quote, priorityFeeMicrolamports, signature, status, timestamps, endpoint, duplicate);
-
-    return { submitted: true, signature, reason: status, status };
   }
 
   private validateQuote(position: Position, quote: Quote): { ok: true } | { ok: false; reason: string } {
@@ -236,11 +235,7 @@ export class SellExecutor {
 
   private resolveWalletPublicKey(position: Position): PublicKey {
     if (this.wallet) return this.wallet.publicKey;
-    try {
-      return new PublicKey(position.walletAddress);
-    } catch {
-      return Keypair.generate().publicKey;
-    }
+    try { return new PublicKey(position.walletAddress); } catch { return Keypair.generate().publicKey; }
   }
 
   private logExit(
@@ -249,7 +244,7 @@ export class SellExecutor {
     quote: Quote,
     priorityFee: number,
     signature: string,
-    status: "confirmed" | "failed" | "unknown",
+    status: "confirmed" | "failed" | "unknown" | "expired",
     timestamps: ExitLatencyTimestamps,
     rpcEndpoint?: string,
     duplicateSend?: boolean
@@ -257,13 +252,8 @@ export class SellExecutor {
     const signalLatencyMs = timestamps.riskDecisionAt - timestamps.marketEventAt;
     const quoteLatencyMs = timestamps.quoteReceivedAt - timestamps.quoteRequestedAt;
     const buildLatencyMs = timestamps.transactionBuiltAt - timestamps.quoteReceivedAt;
-    const submissionLatencyMs = timestamps.transactionSubmittedAt
-      ? timestamps.transactionSubmittedAt - timestamps.transactionBuiltAt
-      : undefined;
-    const confirmationLatencyMs =
-      timestamps.confirmationAt && timestamps.transactionSubmittedAt
-        ? timestamps.confirmationAt - timestamps.transactionSubmittedAt
-        : undefined;
+    const submissionLatencyMs = timestamps.transactionSubmittedAt ? timestamps.transactionSubmittedAt - timestamps.transactionBuiltAt : undefined;
+    const confirmationLatencyMs = timestamps.confirmationAt && timestamps.transactionSubmittedAt ? timestamps.confirmationAt - timestamps.transactionSubmittedAt : undefined;
     const totalExitLatencyMs = timestamps.confirmationAt ? timestamps.confirmationAt - timestamps.marketEventAt : undefined;
 
     this.logger.info("exit_execution", {
@@ -279,14 +269,7 @@ export class SellExecutor {
       transactionSignature: signature,
       duplicateSend,
       timestamps,
-      latencies: {
-        signalLatencyMs,
-        quoteLatencyMs,
-        buildLatencyMs,
-        submissionLatencyMs,
-        confirmationLatencyMs,
-        totalExitLatencyMs
-      },
+      latencies: { signalLatencyMs, quoteLatencyMs, buildLatencyMs, submissionLatencyMs, confirmationLatencyMs, totalExitLatencyMs },
       finalState: status
     });
   }
