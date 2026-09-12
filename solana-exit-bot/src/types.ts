@@ -26,7 +26,7 @@ export interface BuiltTransaction {
   blockhashFetchedAt?: number;
   quoteId?: string;
 }
-export type ConfirmationStatus = "confirmed" | "failed" | "unknown" | "expired";
+export type ConfirmationStatus = "confirmed" | "finalized" | "failed" | "unknown" | "expired";
 export interface SellExecutionResult { submitted: boolean; signature?: string; reason: string; status?: ConfirmationStatus; }
 export interface ExecutionAttempt {
   executionId: string;
@@ -42,6 +42,7 @@ export interface ExecutionAttempt {
   processedAt?: number;
   confirmedAt?: number;
   finalizedAt?: number;
+  failedAt?: number;
   expiryDetectedAt?: number;
   rebuildCount: number;
   rpcEndpoint?: string;
