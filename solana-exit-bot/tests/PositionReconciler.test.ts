@@ -21,17 +21,19 @@ const makePosition = (remainingPercentage = 100): Position => ({
   completedTakeProfitLevels: new Set()
 });
 
+const signatureStatus = (status: "confirmed" | "failed" | "unknown" | "throw" = "confirmed") => vi.fn(async () => {
+  if (status === "throw") throw new Error("signature RPC timeout");
+  if (status === "failed") return { value: { err: { custom: 1 }, confirmationStatus: "confirmed" } };
+  if (status === "unknown") return { value: null };
+  return { value: { err: null, confirmationStatus: "confirmed" } };
+});
+
 const fakeRpc = (
   observedRaw: bigint,
   options: { rpcFail?: boolean; signatureStatus?: "confirmed" | "failed" | "unknown" | "throw" } = {}
 ) => {
   const connection = {
-    getSignatureStatus: vi.fn(async () => {
-      if (options.signatureStatus === "throw") throw new Error("signature RPC timeout");
-      if (options.signatureStatus === "failed") return { value: { err: { custom: 1 }, confirmationStatus: "confirmed" } };
-      if (options.signatureStatus === "unknown") return { value: null };
-      return { value: { err: null, confirmationStatus: "confirmed" } };
-    }),
+    getSignatureStatus: signatureStatus(options.signatureStatus),
     getParsedTokenAccountsByOwner: vi.fn(async () => {
       if (options.rpcFail) throw new Error("RPC timeout");
       return {
@@ -42,9 +44,8 @@ const fakeRpc = (
   return {
     getEndpointsInPriorityOrder: () => ["http://rpc"],
     getActiveEndpoint: () => "http://rpc",
-    recordHealthCheck: vi.fn(async () => undefined),
-    getActiveEndpoint: () => "http://rpc",
-    getConnection: () => connection
+    getConnection: () => connection,
+    recordHealthCheck: vi.fn(async () => undefined)
   } as never;
 };
 
@@ -102,5 +103,33 @@ describe("PositionReconciler", () => {
     const result = await new PositionReconciler(fakeRpc(0n, { signatureStatus: "throw" })).reconcile(position, 1_000_000n, "sig");
     expect(result).toBe("UNAVAILABLE");
     expect(position.sellState).toBe("UNKNOWN");
+  });
+
+  test("fails over to a second RPC endpoint after the first signature lookup fails", async () => {
+    const position = makePosition();
+    let firstCalls = 0;
+    let secondCalls = 0;
+    const first = {
+      getSignatureStatus: signatureStatus("throw"),
+      getParsedTokenAccountsByOwner: vi.fn(async () => { firstCalls += 1; throw new Error("ETIMEDOUT"); })
+    };
+    const second = {
+      getSignatureStatus: signatureStatus("confirmed"),
+      getParsedTokenAccountsByOwner: vi.fn(async () => {
+        secondCalls += 1;
+        return { value: [{ account: { data: { parsed: { info: { tokenAmount: { amount: "0" } } } } } }] };
+      })
+    };
+    const manager = {
+      getEndpointsInPriorityOrder: () => ["http://rpc-a", "http://rpc-b"],
+      getActiveEndpoint: () => "http://rpc-a",
+      getConnection: (endpoint: string) => endpoint === "http://rpc-a" ? first : second,
+      recordHealthCheck: vi.fn(async () => undefined)
+    };
+    const result = await new PositionReconciler(manager as never).reconcile(position, 1_000_000n, "sig-failover");
+    expect(result).toBe("SOLD");
+    expect(firstCalls).toBe(0);
+    expect(secondCalls).toBe(1);
+    expect(position.sellSignature).toBe("sig-failover");
   });
 });
