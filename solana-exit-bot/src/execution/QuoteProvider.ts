@@ -42,7 +42,11 @@ export class JupiterQuoteProvider implements QuoteProvider {
         try { res = await fetch(`${this.endpoint}?${key}`, { headers, signal: controller.signal }); } finally { clearTimeout(timeout); }
         if (!res.ok) {
           const detail = await res.text().catch(() => "");
-          if (res.status < 500 && res.status !== 429) throw new Error(`Jupiter quote failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ""}`);
+          // Permanent client errors are deterministic failures. Retrying them
+          // wastes the latency budget and can amplify provider load.
+          if (res.status < 500 && res.status !== 429) {
+            throw new Error(`Jupiter quote failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ""}`);
+          }
           throw new Error(`Jupiter quote transient failure: ${res.status}`);
         }
         const body = (await res.json()) as Record<string, unknown>;
@@ -64,7 +68,10 @@ export class JupiterQuoteProvider implements QuoteProvider {
         return quote;
       } catch (error) {
         lastError = error;
-        if (attempt + 1 < attempts) await sleep(Math.min(100, 25 * 2 ** attempt));
+        const message = error instanceof Error ? error.message : String(error);
+        const retryable = /transient failure:\s*(429|5\d\d)\b/i.test(message) || /aborted|network|fetch failed|timeout/i.test(message);
+        if (!retryable || attempt + 1 >= attempts) break;
+        await sleep(Math.min(100, 25 * 2 ** attempt));
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -78,9 +85,6 @@ export class JupiterQuoteProvider implements QuoteProvider {
     const primary = await this.getQuote(request);
     if (primary.routeAvailable) return primary;
 
-    // During a liquidity collapse, a normal multi-hop route can disappear before
-    // a still-usable direct pool. Make one direct-route attempt before declaring
-    // the asset unexecutable. This is deliberately not a blind transaction send.
     try {
       const direct = await this.getQuote({ ...request, onlyDirectRoutes: true });
       if (direct.routeAvailable) return direct;
