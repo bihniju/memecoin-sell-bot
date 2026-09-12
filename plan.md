@@ -14,70 +14,70 @@
 ## P0 — Transaction correctness and blockhash expiry
 
 ### 1. Execution attempt model
-- [ ] Add a first-class `ExecutionAttempt` model.
-- [ ] Track execution ID, position ID, quote ID, transaction hash, blockhash, and `lastValidBlockHeight`.
-- [ ] Track build/sign/submit/processed/confirmed/finalized/expiry timestamps.
-- [ ] Track rebuild count, RPC endpoint, status, and reconciliation result.
-- [ ] Preserve the original exit trigger across rebuilds.
+- [x] Add a first-class `ExecutionAttempt` model.
+- [x] Track execution ID, position ID, quote ID, transaction hash, blockhash, and `lastValidBlockHeight`.
+- [x] Track build/sign/submit/processed/confirmed/finalized/expiry timestamps.
+- [x] Track rebuild count, RPC endpoint, status, and reconciliation result.
+- [x] Preserve the original exit trigger across rebuilds.
 
 ### 2. Preserve Jupiter transaction metadata
-- [ ] Preserve `lastValidBlockHeight` from the Jupiter swap/build response.
-- [ ] Preserve the transaction's recent blockhash.
-- [ ] Carry expiry metadata from transaction builder into transport/execution state.
-- [ ] Add validation for missing or malformed expiry metadata.
+- [x] Preserve `lastValidBlockHeight` from the Jupiter swap/build response.
+- [x] Preserve the transaction's recent blockhash.
+- [x] Carry expiry metadata from transaction builder into transport/execution state.
+- [x] Add validation for missing or malformed expiry metadata.
 
 ### 3. Detect blockhash expiry before broadcast
-- [ ] Check current block height against `lastValidBlockHeight` before sending.
-- [ ] Refuse to broadcast a transaction that is already expired.
-- [ ] Ensure an expired transaction is never resent unchanged.
+- [x] Check current block height against `lastValidBlockHeight` before sending.
+- [x] Refuse to broadcast a transaction that is already expired.
+- [x] Ensure an expired transaction is never resent unchanged.
 
 ### 4. Expiry-aware confirmation
-- [ ] Monitor signature status while the transaction is still valid.
-- [ ] Check block height while waiting for confirmation.
-- [ ] Distinguish `UNKNOWN`, `FAILED`, `CONFIRMED`, `FINALIZED`, and `EXPIRED`.
-- [ ] Treat RPC timeout as uncertainty, not failure.
+- [x] Monitor signature status while the transaction is still valid.
+- [x] Check block height while waiting for confirmation.
+- [x] Distinguish `UNKNOWN`, `FAILED`, `CONFIRMED`, `FINALIZED`, and `EXPIRED`.
+- [x] Treat RPC timeout as uncertainty, not failure.
 
 ### 5. Reconciliation before rebuild
-- [ ] When status becomes `UNKNOWN`, reconcile across healthy RPC endpoints before rebuilding.
-- [ ] Check signature history/status before creating another transaction.
-- [ ] Reconcile token balance/position state where required.
-- [ ] Never rebuild while the previous execution could still have landed without first reconciling.
+- [~] When status becomes `UNKNOWN`, reconcile across healthy RPC endpoints before rebuilding.
+- [x] Check signature history/status before creating another transaction.
+- [~] Reconcile token balance/position state where required.
+- [x] Never rebuild while the previous execution could still have landed without first reconciling.
 
 ### 6. Safe rebuild flow
-- [ ] Rebuild only after the previous attempt is known expired/absent and reconciliation permits it.
-- [ ] Request a fresh Jupiter quote before every rebuild.
-- [ ] Build with a fresh recent blockhash and fresh expiry height.
-- [ ] Ensure rebuilt transaction bytes differ when the blockhash changes.
-- [ ] Prevent duplicate rebuilds for the same execution/position.
+- [x] Rebuild only after the previous attempt is known expired/absent and reconciliation permits it.
+- [x] Request a fresh Jupiter quote before every rebuild.
+- [x] Build with a fresh recent blockhash and fresh expiry height.
+- [x] Ensure rebuilt transaction bytes differ when the blockhash changes.
+- [x] Prevent duplicate rebuilds for the same execution/position.
 
 ### 7. P0 tests
-- [ ] Expired before send.
-- [ ] Expiry while confirming.
-- [ ] RPC timeout but transaction later lands.
-- [ ] Timeout + transaction absent while transaction is still valid.
-- [ ] Expired + absent → rebuild.
-- [ ] Expired + confirmed through another RPC → mark sold, do not rebuild.
-- [ ] Duplicate execution ID cannot create duplicate sells.
-- [ ] Rebuild always uses a fresh quote.
-- [ ] Rebuild always uses a fresh blockhash/expiry.
-- [ ] Old serialized transaction is never resent after expiry.
+- [x] Expired before send.
+- [x] Expiry while confirming.
+- [x] RPC timeout but transaction later lands.
+- [x] Timeout + transaction absent while transaction is still valid.
+- [x] Expired + absent → rebuild.
+- [x] Expired + confirmed through another RPC → mark sold, do not rebuild.
+- [x] Duplicate execution ID cannot create duplicate sells.
+- [x] Rebuild always uses a fresh quote.
+- [x] Rebuild always uses a fresh blockhash/expiry.
+- [x] Old serialized transaction is never resent after expiry.
 
 ## P0 — Real Solana/Jupiter dry-run
 
 ### 8. Read-only production-path dry run
-- [ ] Add a clearly named real dry-run mode that never broadcasts.
-- [ ] Connect to a real Solana RPC using environment configuration.
-- [ ] Fetch real wallet/token balances without requiring signing.
-- [ ] Request real Jupiter quotes.
-- [ ] Validate route, output, slippage, price impact, timestamps, and amount bounds.
-- [ ] Build and deserialize the real transaction response.
-- [ ] Inspect blockhash and expiry metadata.
-- [ ] Optionally simulate the transaction without broadcasting.
-- [ ] Record latency for quote/build/simulation stages.
+- [x] Add a clearly named real dry-run mode that never broadcasts.
+- [x] Connect to a real Solana RPC using environment configuration.
+- [x] Fetch real wallet/token balances without requiring signing.
+- [x] Request real Jupiter quotes.
+- [x] Validate route, output, slippage, price impact, timestamps, and amount bounds.
+- [x] Build and deserialize the real transaction response.
+- [x] Inspect blockhash and expiry metadata.
+- [x] Optionally simulate the transaction without broadcasting.
+- [x] Record latency for quote/build/simulation stages.
 
 ### 9. Dry-run safety tests
-- [ ] Assert real dry-run cannot call `sendRawTransaction`.
-- [ ] Assert CI/test environments cannot accidentally enter live mode.
+- [~] Assert real dry-run cannot call `sendRawTransaction`.
+- [~] Assert CI/test environments cannot accidentally enter live mode.
 - [ ] Test Jupiter 429, 5xx, timeout, malformed response, and no-route behavior.
 - [ ] Test RPC timeout, rate limiting, stale endpoint, and unavailable endpoint behavior.
 
@@ -235,12 +235,12 @@ Only begin after all P0/P1 gates pass.
 
 ## Definition of done
 
-- [ ] Blockhash expiry is detected correctly.
-- [ ] Expired transactions are never blindly resent.
-- [ ] Expiry triggers fresh quote + fresh build + fresh blockhash.
-- [ ] `UNKNOWN` is reconciled before rebuilding.
-- [ ] Duplicate broadcasts are prevented.
-- [ ] Real Jupiter quote/build/simulation path works in dry-run.
+- [x] Blockhash expiry is detected correctly.
+- [x] Expired transactions are never blindly resent.
+- [x] Expiry triggers fresh quote + fresh build + fresh blockhash.
+- [~] `UNKNOWN` is reconciled before rebuilding.
+- [x] Duplicate broadcasts are prevented.
+- [~] Real Jupiter quote/build/simulation path works in dry-run.
 - [ ] RPC failover survives load and degraded endpoints.
 - [ ] Confirmation edge cases have deterministic outcomes.
 - [ ] Liquidity/rug deterioration is detected without relying on one signal.
@@ -248,15 +248,15 @@ Only begin after all P0/P1 gates pass.
 - [ ] p50/p95/p99 exit latency is measured.
 - [ ] Chaos and soak tests pass.
 - [ ] Shadow mode works with zero broadcast capability.
-- [ ] Live trading remains off by default.
+- [x] Live trading remains off by default.
 
 ## Recommended implementation order
 
-1. [ ] ExecutionAttempt + blockhash/expiry metadata.
-2. [ ] Expiry-aware transport and confirmation.
-3. [ ] Reconciliation and safe rebuild orchestration.
-4. [ ] P0 expiry/confirmation tests.
-5. [ ] Real Jupiter/Solana dry-run.
+1. [x] ExecutionAttempt + blockhash/expiry metadata.
+2. [x] Expiry-aware transport and confirmation.
+3. [~] Reconciliation and safe rebuild orchestration.
+4. [x] P0 expiry/confirmation tests.
+5. [~] Real Jupiter/Solana dry-run.
 6. [ ] RPC failover/load tests.
 7. [ ] Latency instrumentation.
 8. [ ] Latency benchmarks.
@@ -269,6 +269,6 @@ Only begin after all P0/P1 gates pass.
 
 ## Current milestone
 
-**Branch:** `production-hardening-p0`  
-**Current focus:** P0 transaction correctness, blockhash expiry/rebuild, and confirmation reconciliation.  
+**Branch:** `p0-real-dry-run`  
+**Current focus:** Finish P0 real Solana/Jupiter dry-run safety tests and complete unknown-state reconciliation; live trading remains OFF.  
 **Live trading:** OFF.
