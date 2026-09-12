@@ -22,29 +22,46 @@ export class SolanaTransactionTransport implements TransactionTransport {
       return { signature: existing, endpoint: this.rpcManager.getActiveEndpoint(), duplicate: true };
     }
 
-    const endpoint = this.rpcManager.getActiveEndpoint();
-    const connection = this.rpcManager.getActiveConnection();
-    const signature = await connection.sendRawTransaction(transaction.serialized, {
-      skipPreflight: this.options.skipPreflight,
-      maxRetries: this.options.maxRetries
-    } satisfies SendOptions);
-    this.sentByHash.set(txHash, signature);
+    const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
+    const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
+    let lastError: unknown;
 
-    return { signature, endpoint, duplicate: false };
+    for (const endpoint of candidates) {
+      try {
+        const connection = this.rpcManager.getConnection(endpoint);
+        const signature = await connection.sendRawTransaction(transaction.serialized, {
+          skipPreflight: this.options.skipPreflight,
+          maxRetries: this.options.maxRetries
+        } satisfies SendOptions);
+
+        // Cache only after the RPC accepted the transaction and returned its signature.
+        this.sentByHash.set(txHash, signature);
+        await this.rpcManager.recordHealthCheck(endpoint, 0, true);
+        return { signature, endpoint, duplicate: false };
+      } catch (error) {
+        lastError = error;
+        this.rpcManager.reportEndpointFailure(endpoint);
+      }
+    }
+
+    throw new Error(
+      `Transaction submission failed on all RPC endpoints: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    );
   }
 
   async confirm(signature: string): Promise<ConfirmationStatus> {
     const start = Date.now();
     const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
+    const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
 
     while (Date.now() - start < this.options.confirmationTimeoutMs) {
-      for (const endpoint of endpoints) {
+      for (const endpoint of candidates) {
         const connection = this.rpcManager.getConnection(endpoint);
         const status = await this.confirmOnConnection(connection, signature);
         if (status === "confirmed") return "confirmed";
         if (status === "failed") return "failed";
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
     return "unknown";
