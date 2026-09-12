@@ -81,6 +81,14 @@
 - [ ] Test Jupiter 429, 5xx, timeout, malformed response, and no-route behavior.
 - [ ] Test RPC timeout, rate limiting, stale endpoint, and unavailable endpoint behavior.
 
+### 9A. Cloud validation
+- [x] Add a manual GitHub Actions workflow for the real mainnet dry-run.
+- [x] Run build, audit, and unit tests before the real dry-run step.
+- [x] Force `MODE=dry-run`, `DRY_RUN=true`, and `LIVE_TRADING_ENABLED=false` in CI.
+- [ ] Execute the workflow against the target wallet and token mint.
+- [ ] Review the complete workflow logs and dry-run JSON output.
+- [ ] Confirm zero broadcast capability was exercised.
+
 ## P1 — Liquidity and rug detection
 
 ### 10. Executable liquidity risk engine
@@ -270,5 +278,5 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** Finish P0 real Solana/Jupiter dry-run safety tests and complete unknown-state reconciliation; live trading remains OFF.  
+**Current focus:** Execute and review the cloud-based real Solana/Jupiter dry-run, finish P0 dry-run safety tests, and complete unknown-state reconciliation; live trading remains OFF.  
 **Live trading:** OFF.
