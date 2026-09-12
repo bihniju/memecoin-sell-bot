@@ -21,7 +21,8 @@ describe("exit resilience", () => {
     const position = createPosition({ mint: "TOKEN", decimals: 9, walletAddress: "wallet", amount: 123.456, amountRaw: 123456789n, entryPrice: 1 });
     await provider.quoteForPosition(position, "SOL", 50, 250);
 
-    const url = String(fetchMock.mock.calls[0]?.[0]);
+    const firstCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const url = String(firstCall?.[0] ?? "");
     expect(url).toContain("amount=61728394");
   });
 
