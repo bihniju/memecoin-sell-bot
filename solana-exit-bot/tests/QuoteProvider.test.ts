@@ -5,6 +5,7 @@ import { Position } from "../src/types.js";
 const position: Position = {
   mint: "TokenMint1111111111111111111111111111111111111",
   decimals: 6,
+  walletAddress: "Wallet111111111111111111111111111111111111111",
   amount: 10,
   amountRaw: 10_000_000n,
   entryPrice: 1,
