@@ -8,6 +8,7 @@ import { PriorityFeeManager } from "./PriorityFeeManager.js";
 import { QuoteProvider } from "./QuoteProvider.js";
 import { RetryManager } from "./RetryManager.js";
 import { ExecutionAttemptTracker } from "./ExecutionAttempt.js";
+import { ExitLatencyMetrics } from "./LatencyMetrics.js";
 import { signBuiltTransaction, SellTransactionBuilder } from "./TransactionBuilder.js";
 import { TransactionSubmissionUncertainError, TransactionTransport } from "./TransactionTransport.js";
 
@@ -22,6 +23,7 @@ export class SellExecutor {
   private running = false;
   private readonly activeMints = new Set<string>();
   private readonly lastDecisionByMint = new Map<string, { trigger: TriggerDecision["trigger"]; at: number }>();
+  private readonly latencyMetrics = new ExitLatencyMetrics();
   private executionSequence = 0;
 
   constructor(
@@ -48,6 +50,11 @@ export class SellExecutor {
     this.lastDecisionByMint.set(mint, { trigger: decision.trigger, at: Date.now() });
     this.queue.push({ mint, decision, marketEventAt });
     this.kick();
+  }
+
+  /** Returns the cumulative latency distribution observed by this executor instance. */
+  getLatencySummary() {
+    return this.latencyMetrics.summary();
   }
 
   private kick(): void {
@@ -287,6 +294,16 @@ export class SellExecutor {
     const confirmationLatencyMs = timestamps.confirmationAt && timestamps.transactionSubmittedAt ? timestamps.confirmationAt - timestamps.transactionSubmittedAt : undefined;
     const totalExitLatencyMs = timestamps.confirmationAt ? timestamps.confirmationAt - timestamps.marketEventAt : undefined;
 
+    this.latencyMetrics.record({
+      signalLatencyMs,
+      quoteLatencyMs,
+      buildLatencyMs,
+      submissionLatencyMs,
+      confirmationLatencyMs,
+      totalExitLatencyMs
+    });
+
+    const latencySummary = this.latencyMetrics.summary();
     this.logger.info("exit_execution", {
       positionId: position.mint,
       mint: position.mint,
@@ -301,6 +318,7 @@ export class SellExecutor {
       duplicateSend,
       timestamps,
       latencies: { signalLatencyMs, quoteLatencyMs, buildLatencyMs, submissionLatencyMs, confirmationLatencyMs, totalExitLatencyMs },
+      latencySummary,
       finalState: status
     });
   }
