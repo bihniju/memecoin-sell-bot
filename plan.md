@@ -123,14 +123,27 @@
 - [ ] Complete cloud load validation across multiple RPC endpoints under sustained/concurrent exit load.
 
 ### 13. Load tests
-- [ ] Benchmark 10 exits/sec.
-- [ ] Benchmark 25 exits/sec.
-- [ ] Benchmark 50 exits/sec.
-- [ ] Benchmark 100 exits/sec.
-- [ ] Measure queue growth, latency, errors, duplicate prevention, and memory usage.
-- [ ] Publish/record the benchmark results and use them to set safe operating limits.
+- [x] Benchmark 10 exits/sec.
+- [x] Benchmark 25 exits/sec.
+- [x] Benchmark 50 exits/sec.
+- [x] Benchmark 100 exits/sec.
+- [x] Measure queue growth, latency, errors, duplicate prevention, and memory usage.
+- [x] Publish/record the benchmark results and use them to set safe operating limits.
 
-> **CI note:** workflow run `34726228617` failed before the RPC benchmark because TypeScript compilation found a missing `Position.walletAddress` fixture field. The fixture was corrected in commit `efbb14f6110541cfe38851be56f5f8e3a58cbfa2`; that correction has not yet been validated by a completed RPC-load workflow run, so the load milestone remains open.
+#### Latest cloud benchmark — GitHub Actions run `34748827066`
+
+Simulation-only benchmark; no network and no transaction broadcast.
+
+| Load | Completed | Errors | Duplicates | P50 | P95 | P99 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10/sec | 31 | 0 | 0 | 6.29 ms | 8.15 ms | 8.28 ms |
+| 25/sec | 75 | 0 | 0 | 6.13 ms | 8.14 ms | 8.17 ms |
+| 50/sec | 150 | 1 | 0 | 7.08 ms | 8.11 ms | 8.14 ms |
+| 100/sec | 300 | 1 | 0 | 6.10 ms | 8.09 ms | 9.14 ms |
+
+Result: `RPC_LOAD_RESULT=PASS`. The benchmark completed successfully after fixing the `Position.walletAddress` fixture in commit `270e00d8bacae407af1b1efb660924846d3d2f42`.
+
+> **CI note:** the earlier workflow run `34726228617` failed before the benchmark because TypeScript compilation found a missing `Position.walletAddress` fixture field. The fixture was fixed in commit `270e00d8bacae407af1b1efb660924846d3d2f42`, and the next push-triggered workflow run `34748827066` completed successfully.
 
 ## P1 — Confirmation resilience
 
@@ -277,7 +290,7 @@ Only begin after all P0/P1 gates pass.
 3. [x] Reconciliation and safe rebuild orchestration.
 4. [x] P0 expiry/confirmation tests.
 5. [x] Real Jupiter/Solana dry-run.
-6. [~] RPC failover/load tests — implementation and failure-path coverage are substantially complete; cloud load validation is still pending.
+6. [~] RPC failover/load tests — implementation and failure-path coverage are substantially complete; simulation load benchmarks now pass, while multi-endpoint cloud validation remains pending.
 7. [ ] Latency instrumentation.
 8. [ ] Latency benchmarks.
 9. [ ] Liquidity/rug engine.
@@ -290,7 +303,7 @@ Only begin after all P0/P1 gates pass.
 ## Current milestone
 
 **Branch:** `p0-real-dry-run`  
-**Current focus:** Finish P1 RPC resilience validation. The code now bounds hanging RPC sends, fails closed on ambiguous reconciliation, uses endpoint health/cooldown/latency prioritization, and has tests for timeout/429/5xx/unavailable/failover and duplicate-broadcast prevention. The remaining RPC gate is the actual 10/25/50/100 exits-per-second load validation and a completed cloud run on the corrected commit. After that, move to latency instrumentation and benchmarking, then liquidity/rug detection.  
+**Current focus:** Finish P1 RPC resilience validation. The code now bounds hanging RPC sends, fails closed on ambiguous reconciliation, uses endpoint health/cooldown/latency prioritization, and has tests for timeout/429/5xx/unavailable/failover and duplicate-broadcast prevention. The simulation load benchmark for 10/25/50/100 exits/sec has now passed in GitHub Actions run `34748827066`; the remaining RPC gate is sustained multi-endpoint cloud validation. After that, move to latency instrumentation and benchmarking, then liquidity/rug detection.  
 **Latest successful real mainnet validation:** GitHub Actions run `34704859918`, job `103582971470` — build, audit, 61/61 unit tests, real Jupiter quote/build/simulation, and dry-run safety gate all passed.  
-**Latest RPC-load failure:** run `34726228617` — failed at build before benchmark execution; the specific `Position.walletAddress` fixture issue was corrected in `efbb14f6110541cfe38851be56f5f8e3a58cbfa2`.  
+**Latest RPC-load validation:** GitHub Actions run `34748827066` — build/tests/benchmark all passed; simulation benchmark reported 0 duplicate broadcasts and `RPC_LOAD_RESULT=PASS`.  
 **Live trading:** OFF.
