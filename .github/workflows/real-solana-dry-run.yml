@@ -11,7 +11,7 @@ on:
       position_mint:
         description: "Test token mint"
         required: true
-        default: "H9gp9xGBEeKcpUNqci1y9nLBALEW6gMHRDoGuyg6pump"
+        default: "EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump"
         type: string
       rpc_url:
         description: "Solana RPC endpoint"
@@ -36,7 +36,7 @@ jobs:
       DRY_RUN: "true"
       LIVE_TRADING_ENABLED: "false"
       WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key || 'BoQjeJzpBTFzNyGStuAvDYsrvbwfGhd3Wspw5PLMnY6s' }}
-      POSITION_MINT: ${{ inputs.position_mint || 'H9gp9xGBEeKcpUNqci1y9nLBALEW6gMHRDoGuyg6pump' }}
+      POSITION_MINT: ${{ inputs.position_mint || 'EBFrSQUyRoxPoPymmcx5X1yYsMqUjpCn6yvEYxhvpump' }}
       RPC_ENDPOINTS: ${{ inputs.rpc_url || 'https://api.mainnet-beta.solana.com' }}
       POSITION_DECIMALS: "6"
       POSITION_AMOUNT: "1"
