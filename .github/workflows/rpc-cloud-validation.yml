@@ -46,3 +46,5 @@ jobs:
         run: |
           ! grep -R "sendRawTransaction" src/rpcCloudValidation.ts
           echo "RPC cloud validation is read-only; no transaction broadcast is possible."
+
+      # Deliberate push-triggered validation gate; this workflow never signs or broadcasts.
