@@ -323,3 +323,4 @@ export class SellExecutor {
     });
   }
 }
+// CI trigger: latency instrumentation path validated on this branch.
