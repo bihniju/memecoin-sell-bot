@@ -7,6 +7,8 @@ on:
       - "solana-exit-bot/src/rpcLoadBenchmark.ts"
       - "solana-exit-bot/package.json"
       - "solana-exit-bot/src/execution/TransactionTransport.ts"
+      - "solana-exit-bot/src/execution/SellExecutor.ts"
+      - "solana-exit-bot/src/execution/LatencyMetrics.ts"
       - "solana-exit-bot/tests/**"
   workflow_dispatch:
 
