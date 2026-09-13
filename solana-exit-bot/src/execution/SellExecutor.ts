@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { Logger } from "../logging/Logger.js";
 import { PositionManager } from "../position/PositionManager.js";
+import { PositionReconciler } from "../position/PositionReconciler.js";
 import { BotConfig, ExitLatencyTimestamps, Position, Quote, SellExecutionResult, TriggerDecision } from "../types.js";
 import { PriorityFeeManager } from "./PriorityFeeManager.js";
 import { QuoteProvider } from "./QuoteProvider.js";
 import { RetryManager } from "./RetryManager.js";
 import { ExecutionAttemptTracker } from "./ExecutionAttempt.js";
+import { ExitLatencyMetrics } from "./LatencyMetrics.js";
 import { signBuiltTransaction, SellTransactionBuilder } from "./TransactionBuilder.js";
 import { TransactionSubmissionUncertainError, TransactionTransport } from "./TransactionTransport.js";
 
@@ -21,6 +23,7 @@ export class SellExecutor {
   private running = false;
   private readonly activeMints = new Set<string>();
   private readonly lastDecisionByMint = new Map<string, { trigger: TriggerDecision["trigger"]; at: number }>();
+  private readonly latencyMetrics = new ExitLatencyMetrics();
   private executionSequence = 0;
 
   constructor(
@@ -32,7 +35,8 @@ export class SellExecutor {
     private readonly feeManager: PriorityFeeManager,
     private readonly transport: TransactionTransport,
     private readonly logger: Logger,
-    private readonly wallet?: Keypair
+    private readonly wallet?: Keypair,
+    private readonly positionReconciler?: PositionReconciler
   ) {}
 
   enqueue(decision: TriggerDecision, mint: string, marketEventAt = Date.now()): void {
@@ -46,6 +50,11 @@ export class SellExecutor {
     this.lastDecisionByMint.set(mint, { trigger: decision.trigger, at: Date.now() });
     this.queue.push({ mint, decision, marketEventAt });
     this.kick();
+  }
+
+  /** Returns the cumulative latency distribution observed by this executor instance. */
+  getLatencySummary() {
+    return this.latencyMetrics.summary();
   }
 
   private kick(): void {
@@ -203,8 +212,7 @@ export class SellExecutor {
       } else if (status === "expired") {
         tracker.markExpired(timestamps.confirmationAt);
       } else if (status === "unknown") {
-        tracker.markUnknown();
-        this.positions.setSellState(position.mint, "UNKNOWN");
+        await this.reconcileUnknown(tracker, position, quote.inAmount, signature);
       } else {
         tracker.markFailed(timestamps.confirmationAt);
         this.positions.setSellState(position.mint, "FAILED");
@@ -212,26 +220,39 @@ export class SellExecutor {
 
       this.logger.info("execution_attempt", tracker.attempt);
       this.logExit(position, decision, quote, priorityFeeMicrolamports, signature, status, timestamps, endpoint, duplicate);
-      return { submitted: true, signature, reason: status, status };
+      return { submitted: true, signature, reason: tracker.attempt.reconciliationResult ?? status, status };
     } catch (error) {
       if (error instanceof TransactionSubmissionUncertainError) {
         timestamps.transactionSubmittedAt = submittedAt;
         tracker.markSubmitted(error.endpoint, submittedAt);
-        tracker.markUnknown();
-        this.positions.setSellState(position.mint, "UNKNOWN");
+        await this.reconcileUnknown(tracker, position, quote.inAmount, error.signature);
         this.logger.warn("execution_attempt_uncertain", {
           ...tracker.attempt,
           signature: error.signature,
           error: error.message
         });
         this.logExit(position, decision, quote, priorityFeeMicrolamports, error.signature, "unknown", timestamps, error.endpoint, false);
-        return { submitted: true, signature: error.signature, reason: "unknown", status: "unknown" };
+        return { submitted: true, signature: error.signature, reason: tracker.attempt.reconciliationResult ?? "unknown", status: "unknown" };
       }
 
       tracker.markUnknown();
       this.logger.warn("execution_attempt_uncertain", { ...tracker.attempt, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
+  }
+
+  private async reconcileUnknown(tracker: ExecutionAttemptTracker, position: Position, expectedSoldAmountRaw: bigint, signature: string): Promise<void> {
+    tracker.markReconciling();
+    if (!this.positionReconciler) {
+      tracker.setReconciliationResult("UNAVAILABLE");
+      this.positions.setSellState(position.mint, "UNKNOWN");
+      return;
+    }
+
+    const result = await this.positionReconciler.reconcile(position, expectedSoldAmountRaw, signature);
+    tracker.setReconciliationResult(result);
+    if (result === "SOLD" || result === "PARTIALLY_SOLD") return;
+    this.positions.setSellState(position.mint, "UNKNOWN");
   }
 
   private validateQuote(position: Position, quote: Quote): { ok: true } | { ok: false; reason: string } {
@@ -273,6 +294,16 @@ export class SellExecutor {
     const confirmationLatencyMs = timestamps.confirmationAt && timestamps.transactionSubmittedAt ? timestamps.confirmationAt - timestamps.transactionSubmittedAt : undefined;
     const totalExitLatencyMs = timestamps.confirmationAt ? timestamps.confirmationAt - timestamps.marketEventAt : undefined;
 
+    this.latencyMetrics.record({
+      signalLatencyMs,
+      quoteLatencyMs,
+      buildLatencyMs,
+      submissionLatencyMs,
+      confirmationLatencyMs,
+      totalExitLatencyMs
+    });
+
+    const latencySummary = this.latencyMetrics.summary();
     this.logger.info("exit_execution", {
       positionId: position.mint,
       mint: position.mint,
@@ -287,7 +318,9 @@ export class SellExecutor {
       duplicateSend,
       timestamps,
       latencies: { signalLatencyMs, quoteLatencyMs, buildLatencyMs, submissionLatencyMs, confirmationLatencyMs, totalExitLatencyMs },
+      latencySummary,
       finalState: status
     });
   }
 }
+// CI trigger: latency instrumentation path validated on this branch.

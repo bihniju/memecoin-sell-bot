@@ -12,6 +12,7 @@ import { LiquidityMonitor } from "./market/LiquidityMonitor.js";
 import { MarketEventNormalizer } from "./market/MarketEventNormalizer.js";
 import { PriceMonitor } from "./market/PriceMonitor.js";
 import { PositionManager } from "./position/PositionManager.js";
+import { PositionReconciler } from "./position/PositionReconciler.js";
 import { createPosition } from "./position/PositionState.js";
 import { RiskEngine } from "./risk/RiskEngine.js";
 import { RpcManager } from "./rpc/RpcManager.js";
@@ -29,6 +30,7 @@ const priceMonitor = new PriceMonitor();
 const liquidityMonitor = new LiquidityMonitor();
 const riskEngine = new RiskEngine(config.risk);
 const rpcManager = new RpcManager(config.rpc.rpcEndpoints.length ? config.rpc.rpcEndpoints : ["https://api.mainnet-beta.solana.com"], logger);
+const positionReconciler = new PositionReconciler(rpcManager);
 
 const quoteProvider: QuoteProvider = config.mode === "paper"
   ? new SimulatedQuoteProvider()
@@ -37,9 +39,10 @@ const txBuilder = new JupiterSellTransactionBuilder(config.market.swapApiUrl, co
 const transport = new SolanaTransactionTransport(rpcManager, {
   skipPreflight: config.execution.skipPreflight,
   maxRetries: config.execution.maxRpcSendRetries,
-  confirmationTimeoutMs: config.execution.confirmationTimeoutMs
+  confirmationTimeoutMs: config.execution.confirmationTimeoutMs,
+  sendTimeoutMs: config.execution.rpcSendTimeoutMs ?? 1500
 });
-const sellExecutor = new SellExecutor(config, positions, quoteProvider, txBuilder, new RetryManager(config.execution), new PriorityFeeManager(config.execution, rpcManager), transport, logger, wallet);
+const sellExecutor = new SellExecutor(config, positions, quoteProvider, txBuilder, new RetryManager(config.execution), new PriorityFeeManager(config.execution, rpcManager), transport, logger, wallet, positionReconciler);
 const normalizer = new MarketEventNormalizer(quoteProvider, priceMonitor, liquidityMonitor, config.market.sampleDebounceMs);
 
 const mint = process.argv.includes("--mint") ? process.argv[process.argv.indexOf("--mint") + 1] : process.env.POSITION_MINT ?? "demo-mint";

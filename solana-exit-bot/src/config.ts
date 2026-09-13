@@ -72,7 +72,8 @@ export const loadConfig = (): BotConfig => {
       quoteRequestTimeoutMs: num(process.env.QUOTE_REQUEST_TIMEOUT_MS, 900),
       quoteRetries: num(process.env.QUOTE_RETRIES, 2),
       congestionRetryDelayMs: num(process.env.CONGESTION_RETRY_DELAY_MS, 50),
-      congestionLatencyMs: num(process.env.CONGESTION_LATENCY_MS, 800)
+      congestionLatencyMs: num(process.env.CONGESTION_LATENCY_MS, 800),
+      rpcSendTimeoutMs: num(process.env.RPC_SEND_TIMEOUT_MS, 1500)
     },
     rpc: {
       network: process.env.NETWORK ?? "mainnet-beta",

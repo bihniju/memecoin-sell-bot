@@ -3,11 +3,7 @@ import { BuiltTransaction, ConfirmationStatus } from "../types.js";
 import { RpcManager } from "../rpc/RpcManager.js";
 
 export class TransactionSubmissionUncertainError extends Error {
-  constructor(
-    public readonly signature: string,
-    public readonly endpoint: string,
-    cause?: unknown
-  ) {
+  constructor(public readonly signature: string, public readonly endpoint: string, cause?: unknown) {
     super(`Transaction submission uncertain for ${signature} via ${endpoint}: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "TransactionSubmissionUncertainError";
   }
@@ -18,17 +14,14 @@ export interface TransactionTransport {
   confirm(signature: string, transaction?: BuiltTransaction): Promise<ConfirmationStatus>;
 }
 
-interface SignatureObservation {
-  status: ConfirmationStatus;
-  absent: boolean;
-}
+interface SignatureObservation { status: ConfirmationStatus; absent: boolean; }
 
 export class SolanaTransactionTransport implements TransactionTransport {
   private readonly sentByHash = new Map<string, string>();
 
   constructor(
     private readonly rpcManager: RpcManager,
-    private readonly options: { skipPreflight: boolean; maxRetries: number; confirmationTimeoutMs: number }
+    private readonly options: { skipPreflight: boolean; maxRetries: number; confirmationTimeoutMs: number; sendTimeoutMs?: number; rpcReadTimeoutMs?: number }
   ) {}
 
   async send(transaction: BuiltTransaction): Promise<{ signature: string; endpoint: string; duplicate: boolean }> {
@@ -40,21 +33,26 @@ export class SolanaTransactionTransport implements TransactionTransport {
     const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
     let lastError: unknown;
 
-    for (const endpoint of candidates) {
-      if (transaction.lastValidBlockHeight !== undefined) {
-        const currentBlockHeight = await this.getCurrentBlockHeight();
-        if (currentBlockHeight > transaction.lastValidBlockHeight) {
-          throw new Error(`Transaction blockhash expired before broadcast: current=${currentBlockHeight} lastValid=${transaction.lastValidBlockHeight}`);
-        }
+    if (transaction.lastValidBlockHeight !== undefined) {
+      const currentBlockHeight = await this.getCurrentBlockHeight();
+      if (currentBlockHeight > transaction.lastValidBlockHeight) {
+        throw new Error(`Transaction blockhash expired before broadcast: current=${currentBlockHeight} lastValid=${transaction.lastValidBlockHeight}`);
       }
+    }
 
+    for (const endpoint of candidates) {
       const started = Date.now();
       try {
         const connection = this.rpcManager.getConnection(endpoint);
-        const signature = await connection.sendRawTransaction(transaction.serialized, {
+        const sendPromise = connection.sendRawTransaction(transaction.serialized, {
           skipPreflight: this.options.skipPreflight,
           maxRetries: this.options.maxRetries
         } satisfies SendOptions);
+        const timeoutMs = Math.max(1, this.options.sendTimeoutMs ?? 1500);
+        const signature = await Promise.race([
+          sendPromise,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`RPC send timeout after ${timeoutMs}ms`)), timeoutMs))
+        ]);
         this.sentByHash.set(txHash, signature);
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, true);
         return { signature, endpoint, duplicate: false };
@@ -62,9 +60,7 @@ export class SolanaTransactionTransport implements TransactionTransport {
         lastError = error;
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, false);
 
-        if (this.isBlockhashExpiredError(error)) {
-          throw error;
-        }
+        if (this.isBlockhashExpiredError(error)) throw error;
 
         if (this.isSubmissionUncertainError(error)) {
           const signature = this.deriveSignature(transaction);
@@ -90,7 +86,6 @@ export class SolanaTransactionTransport implements TransactionTransport {
   async confirm(signature: string, transaction?: BuiltTransaction): Promise<ConfirmationStatus> {
     const start = Date.now();
     let pollDelayMs = 25;
-
     while (Date.now() - start < this.options.confirmationTimeoutMs) {
       const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
       const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
@@ -105,7 +100,7 @@ export class SolanaTransactionTransport implements TransactionTransport {
 
         if (transaction?.lastValidBlockHeight !== undefined) {
           try {
-            const blockHeight = await connection.getBlockHeight("confirmed");
+            const blockHeight = await this.withRpcTimeout(connection.getBlockHeight("confirmed"));
             highestObservedBlockHeight = Math.max(highestObservedBlockHeight ?? blockHeight, blockHeight);
             if (blockHeight > transaction.lastValidBlockHeight) {
               const finalObservation = await this.confirmOnConnection(connection, signature);
@@ -118,42 +113,40 @@ export class SolanaTransactionTransport implements TransactionTransport {
         }
       }
 
-      if (transaction?.lastValidBlockHeight !== undefined && highestObservedBlockHeight !== undefined && highestObservedBlockHeight > transaction.lastValidBlockHeight && successfulAbsentLookup) {
-        return "expired";
-      }
-
+      if (transaction?.lastValidBlockHeight !== undefined && highestObservedBlockHeight !== undefined && highestObservedBlockHeight > transaction.lastValidBlockHeight && successfulAbsentLookup) return "expired";
       await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
       pollDelayMs = Math.min(100, pollDelayMs * 2);
     }
-
     return "unknown";
   }
 
   private async getCurrentBlockHeight(): Promise<number> {
     const endpoints = this.rpcManager.getEndpointsInPriorityOrder();
     const candidates = endpoints.length > 0 ? endpoints : [this.rpcManager.getActiveEndpoint()];
-    let highestBlockHeight: number | undefined;
-    let lastError: unknown;
-    for (const endpoint of candidates) {
+    const timeoutMs = Math.max(1, this.options.rpcReadTimeoutMs ?? 1000);
+    const results = await Promise.all(candidates.map(async (endpoint) => {
       const started = Date.now();
       try {
         const connection = this.rpcManager.getConnection(endpoint);
-        const blockHeight = await connection.getBlockHeight("confirmed");
-        highestBlockHeight = Math.max(highestBlockHeight ?? blockHeight, blockHeight);
+        const blockHeight = await this.withRpcTimeout(connection.getBlockHeight("confirmed"), timeoutMs);
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, true);
+        return { blockHeight };
       } catch (error) {
-        lastError = error;
         await this.rpcManager.recordHealthCheck(endpoint, Date.now() - started, false);
+        return { error };
       }
-    }
-    if (highestBlockHeight !== undefined) return highestBlockHeight;
+    }));
+
+    const successful = results.filter((result): result is { blockHeight: number } => "blockHeight" in result);
+    if (successful.length > 0) return Math.max(...successful.map((result) => result.blockHeight));
+    const lastError = results.find((result): result is { error: unknown } => "error" in result)?.error;
     throw new Error(`Unable to read Solana block height before broadcast: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   private async confirmOnConnection(connection: Connection, signature: string): Promise<SignatureObservation> {
     const started = Date.now();
     try {
-      const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+      const status = await this.withRpcTimeout(connection.getSignatureStatus(signature, { searchTransactionHistory: true }));
       await this.rpcManager.recordHealthCheck(connection.rpcEndpoint, Date.now() - started, true);
       const value = status.value;
       if (!value) return { status: "unknown", absent: true };
@@ -165,6 +158,13 @@ export class SolanaTransactionTransport implements TransactionTransport {
       await this.rpcManager.recordHealthCheck(connection.rpcEndpoint, Date.now() - started, false);
       return { status: "unknown", absent: false };
     }
+  }
+
+  private async withRpcTimeout<T>(promise: Promise<T>, timeoutMs = Math.max(1, this.options.rpcReadTimeoutMs ?? 1000)): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`RPC read timeout after ${timeoutMs}ms`)), timeoutMs))
+    ]);
   }
 
   private isSubmissionUncertainError(error: unknown): boolean {
@@ -184,26 +184,16 @@ export class SolanaTransactionTransport implements TransactionTransport {
       const signature = parsed.signatures[0];
       if (!signature || signature.every((byte) => byte === 0)) return undefined;
       return encodeBase58(signature);
-    } catch {
-      return undefined;
-    }
+    } catch { return undefined; }
   }
 }
 
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
 function encodeBase58(bytes: Uint8Array): string {
   let value = 0n;
   for (const byte of bytes) value = (value << 8n) + BigInt(byte);
   let encoded = "";
-  while (value > 0n) {
-    const remainder = Number(value % 58n);
-    encoded = BASE58_ALPHABET[remainder] + encoded;
-    value /= 58n;
-  }
-  for (const byte of bytes) {
-    if (byte !== 0) break;
-    encoded = `1${encoded}`;
-  }
+  while (value > 0n) { const remainder = Number(value % 58n); encoded = BASE58_ALPHABET[remainder] + encoded; value /= 58n; }
+  for (const byte of bytes) { if (byte !== 0) break; encoded = `1${encoded}`; }
   return encoded || "1";
 }

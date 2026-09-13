@@ -1,0 +1,66 @@
+name: Real Solana/Jupiter Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      wallet_public_key:
+        description: "Public wallet address to inspect (no private key)"
+        required: true
+        type: string
+      position_mint:
+        description: "SPL token mint to inspect"
+        required: true
+        type: string
+      rpc_endpoint:
+        description: "Optional Solana mainnet RPC URL"
+        required: false
+        default: "https://api.mainnet-beta.solana.com"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-dry-run
+  cancel-in-progress: true
+
+jobs:
+  real-dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: solana-exit-bot
+    env:
+      WALLET_PUBLIC_KEY: ${{ inputs.wallet_public_key }}
+      POSITION_MINT: ${{ inputs.position_mint }}
+      RPC_ENDPOINT: ${{ inputs.rpc_endpoint }}
+      MODE: dry-run
+      DRY_RUN: "true"
+      LIVE_TRADING_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: solana-exit-bot/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Security audit
+        run: npm audit --audit-level=high
+
+      - name: Typecheck / build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Real Solana/Jupiter dry run
+        run: npm run dry-run:real

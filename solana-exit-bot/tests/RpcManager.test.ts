@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Logger } from "../src/logging/Logger.js";
 import { RpcManager } from "../src/rpc/RpcManager.js";
 
@@ -7,7 +7,81 @@ describe("RpcManager", () => {
     const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
     await manager.recordHealthCheck("http://a", 50, false);
     await manager.recordHealthCheck("http://b", 10, true);
-
     expect(manager.getActiveEndpoint()).toBe("http://b");
+  });
+
+  test("marks timeout-like endpoint failure and cools it down", async () => {
+    const manager = new RpcManager(["http://timeout", "http://healthy"], new Logger("error"));
+    await manager.recordHealthCheck("http://timeout", 900, false);
+    await manager.recordHealthCheck("http://healthy", 40, true);
+    expect(manager.getEndpointsInPriorityOrder()).not.toContain("http://timeout");
+    expect(manager.getActiveEndpoint()).toBe("http://healthy");
+  });
+
+  test("marks rate-limited and server-error endpoints unavailable until cooldown", async () => {
+    const manager = new RpcManager(["http://429", "http://503", "http://healthy"], new Logger("error"));
+    await manager.recordHealthCheck("http://429", 20, false);
+    await manager.recordHealthCheck("http://503", 20, false);
+    await manager.recordHealthCheck("http://healthy", 30, true);
+    expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+    expect(manager.getActiveEndpoint()).toBe("http://healthy");
+  });
+
+  test("fails over when the active endpoint becomes unavailable", async () => {
+    const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
+    await manager.recordHealthCheck("http://a", 25, true);
+    await manager.recordHealthCheck("http://b", 50, true);
+    expect(manager.getActiveEndpoint()).toBe("http://a");
+    manager.reportEndpointFailure("http://a");
+    expect(manager.getActiveEndpoint()).toBe("http://b");
+    expect(manager.getEndpointsInPriorityOrder()).not.toContain("http://a");
+  });
+
+  test("recovers a failed endpoint and clears its cooldown", async () => {
+    const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
+    await manager.recordHealthCheck("http://a", 20, false);
+    expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://b"]);
+    await manager.recordHealthCheck("http://a", 15, true);
+    expect(manager.getEndpointsInPriorityOrder()[0]).toBe("http://a");
+    expect(manager.getBestLatencyMs()).toBe(15);
+  });
+
+  test("repeated failures increase cooldown and prevent flapping", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new RpcManager(["http://flapping", "http://healthy"], new Logger("error"));
+      await manager.recordHealthCheck("http://healthy", 50, true);
+      await manager.recordHealthCheck("http://flapping", 20, false);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+
+      vi.advanceTimersByTime(2_000);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy", "http://flapping"]);
+
+      await manager.recordHealthCheck("http://flapping", 20, false);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+
+      vi.advanceTimersByTime(3_999);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy"]);
+      vi.advanceTimersByTime(1);
+      expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://healthy", "http://flapping"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("healthy endpoint is preferred by latency after recovery", async () => {
+    const manager = new RpcManager(["http://slow", "http://fast"], new Logger("error"));
+    await manager.recordHealthCheck("http://slow", 700, true);
+    await manager.recordHealthCheck("http://fast", 50, true);
+    expect(manager.getEndpointsInPriorityOrder()).toEqual(["http://fast", "http://slow"]);
+    expect(manager.getBestLatencyMs()).toBe(50);
+  });
+
+  test("returns the active endpoint when all endpoints are unavailable", async () => {
+    const manager = new RpcManager(["http://a", "http://b"], new Logger("error"));
+    await manager.recordHealthCheck("http://a", 20, false);
+    await manager.recordHealthCheck("http://b", 30, false);
+    expect(manager.getEndpointsInPriorityOrder()).toEqual([]);
+    expect(manager.failover()).toBe("http://b");
   });
 });

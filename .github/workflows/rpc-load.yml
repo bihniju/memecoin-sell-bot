@@ -1,0 +1,42 @@
+name: RPC Load Benchmark
+
+on:
+  push:
+    branches: [p0-real-dry-run]
+    paths:
+      - "solana-exit-bot/src/rpcLoadBenchmark.ts"
+      - "solana-exit-bot/package.json"
+      - "solana-exit-bot/src/execution/TransactionTransport.ts"
+      - "solana-exit-bot/src/execution/SellExecutor.ts"
+      - "solana-exit-bot/src/execution/LatencyMetrics.ts"
+      - "solana-exit-bot/tests/**"
+  workflow_dispatch:
+
+jobs:
+  rpc-load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: solana-exit-bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: solana-exit-bot/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Run safe 10/25/50/100 exits/sec benchmark
+        env:
+          RPC_LOAD_DURATION_MS: 3000
+          RPC_LOAD_SERVICE_LATENCY_MS: 5
+          RPC_LOAD_JITTER_MS: 3
+          RPC_LOAD_ERROR_RATE: 0.01
+          RPC_LOAD_CONCURRENCY: 32
+          MODE: dry-run
+          DRY_RUN: "true"
+          LIVE_TRADING_ENABLED: "false"
+        run: npm run rpc-load
