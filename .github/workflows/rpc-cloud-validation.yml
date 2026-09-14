@@ -38,7 +38,7 @@ jobs:
           RPC_VALIDATION_DURATION_MS: 30000
           RPC_VALIDATION_RATE: 10
           RPC_VALIDATION_TIMEOUT_MS: 3000
-          RPC_VALIDATION_ENDPOINTS: https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com
+          RPC_VALIDATION_ENDPOINTS: ${{ secrets.HELIUS_RPC_URL }},${{ secrets.QUICKNODE_RPC_URL }},${{ secrets.SOLANA_RPC_URL }}
         run: npm run rpc-cloud-validation
 
       - name: Broadcast safety assertion
