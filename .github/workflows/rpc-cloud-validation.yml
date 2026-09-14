@@ -1,0 +1,50 @@
+name: RPC Cloud Resilience
+
+on:
+  push:
+    branches: [main, p1-rpc-real-validation]
+  workflow_dispatch:
+
+jobs:
+  rpc-cloud-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: solana-exit-bot/package-lock.json
+
+      - name: Install dependencies
+        working-directory: solana-exit-bot
+        run: npm ci
+
+      - name: Build
+        working-directory: solana-exit-bot
+        run: npm run build
+
+      - name: Unit tests
+        working-directory: solana-exit-bot
+        run: npm test
+
+      - name: Multi-RPC sustained read validation
+        working-directory: solana-exit-bot
+        env:
+          RPC_VALIDATION_DURATION_MS: 30000
+          RPC_VALIDATION_RATE: 10
+          RPC_VALIDATION_TIMEOUT_MS: 3000
+          RPC_VALIDATION_ENDPOINTS: ${{ secrets.HELIUS_RPC_URL }},${{ secrets.QUICKNODE_RPC_URL }},${{ secrets.SOLANA_RPC_URL }}
+        run: npm run rpc-cloud-validation
+
+      - name: Broadcast safety assertion
+        working-directory: solana-exit-bot
+        run: |
+          ! grep -R "sendRawTransaction" src/rpcCloudValidation.ts
+          echo "RPC cloud validation is read-only; no transaction broadcast is possible."
+
+      # Deliberate push-triggered validation gate; this workflow never signs or broadcasts.
